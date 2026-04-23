@@ -131,6 +131,7 @@ A powerful **MCP server** and **CLI toolkit** that indexes local code into a gra
 -   **Dual Mode:** Works as a standalone **CLI toolkit** for developers and as an **MCP server** for AI agents.
 -   **Multi-Language Support:** Full support for 14 programming languages.
 -   **Flexible Database Backend:** KùzuDB (default on Windows), FalkorDB Lite (typical embedded default on Unix when installed), FalkorDB Remote, or Neo4j (all platforms via Docker/native).
+-   **Multi-Graph MCP Support:** MCP clients can target a specific graph per call via an optional `graph_name` argument on most tools, so one server instance can serve many isolated graphs (FalkorDB named graphs / Neo4j databases). Omit the argument to use the backend's configured default — fully backward-compatible. A `list_graphs` tool lets clients enumerate what the backend has available. Kùzu accepts the argument but has no per-graph namespace, so it is silently ignored there.
 
 ---
 
@@ -412,6 +413,52 @@ Add the following server configuration to your client's settings file (e.g., VS 
 
 ---
 
+## Targeting Graphs from the MCP Client
+
+Most query and indexing tools accept an optional `graph_name` parameter that selects which backend graph the tool operates on. A "graph" here is a backend-level namespace: a **FalkorDB named graph** or a **Neo4j database**. KùzuDB has no equivalent concept — the parameter is accepted for API parity and silently ignored.
+
+### How it resolves
+
+Precedence when a tool is invoked:
+
+1. `graph_name` passed on the MCP tool call (highest).
+2. `FALKORDB_GRAPH_NAME` / `NEO4J_DATABASE` environment variable (per-server default).
+3. Backend default (`codegraph` on FalkorDB; the default Neo4j database).
+
+Omitting `graph_name` reproduces the prior single-graph behavior exactly.
+
+### Discovering graphs
+
+A dedicated `list_graphs` tool enumerates the graphs visible to the active backend — FalkorDB `GRAPH.LIST`, Neo4j `SHOW DATABASES`, or an empty list for Kùzu. Use this when an agent needs to confirm what graphs exist before targeting one.
+
+### Example configuration with a default graph
+
+Pin one server instance to a specific default graph via env:
+
+```json
+{
+  "mcpServers": {
+    "CodeGraphContext": {
+      "command": "cgc",
+      "args": ["mcp", "start"],
+      "env": {
+        "DEFAULT_DATABASE": "falkordb-remote",
+        "FALKORDB_HOST": "your-falkordb-host",
+        "FALKORDB_GRAPH_NAME": "my_default_graph"
+      }
+    }
+  }
+}
+```
+
+Tool calls without `graph_name` will target `my_default_graph`; any tool call that passes `graph_name` overrides it for that call only.
+
+### Concurrency and isolation
+
+`graph_name` is resolved per call — two concurrent tool calls targeting different graphs do not share any mutable driver state. This makes it safe to deploy one server instance behind an MCP gateway that multiplexes requests across graphs.
+
+---
+
 ## Natural Language Interaction Examples
 
 Once the server is running, you can interact with it through your AI assistant using plain English. Here are some examples of what you can say:
@@ -467,6 +514,14 @@ Once the server is running, you can interact with it through your AI assistant u
     -   "Is there any dead or unused code in this project?"
     -   "Calculate the cyclomatic complexity of the `process_data` function in `src/utils.py`."
     -   "Find the 5 most complex functions in the codebase."
+
+-   **Working with multiple graphs (per-call targeting):**
+    -   "List all available graphs on the backend." *(calls `list_graphs`)*
+    -   "How many File nodes are in the graph `my_graph`?" *(targets a specific graph)*
+    -   "Compare the Function-node counts between graphs `project_alpha` and `project_beta`." *(parallel cross-graph analysis)*
+    -   "Find dead code in the graph `my_graph`, then do the same for `other_graph` and tell me the overlap."
+
+    Once you've established a target graph in the conversation, you can typically keep asking follow-up questions without repeating the name — a well-behaved MCP client will carry it forward. If in doubt, say the graph name again; or set a default graph via `FALKORDB_GRAPH_NAME` / `NEO4J_DATABASE` in your MCP server config (see the [Targeting Graphs from the MCP Client](#targeting-graphs-from-the-mcp-client) section above).
 
 -   **Repository Management:**
     -   "List all currently indexed repositories."

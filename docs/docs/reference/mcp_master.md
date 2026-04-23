@@ -1,12 +1,23 @@
 # MCP Reference & Natural Language Queries
 
-This page lists the **complete MCP tool catalog** for CodeGraphContext **0.4.2** (**21** tools returned by MCP `tools/list`)—every tool your AI assistant (Cursor, Claude, VS Code, and other MCP clients) can invoke.
+This page lists the **complete MCP tool catalog** for CodeGraphContext (**22** tools returned by MCP `tools/list`)—every tool your AI assistant (Cursor, Claude, VS Code, and other MCP clients) can invoke.
 
 When you ask a question in natural language, the assistant selects one of these tools behind the scenes.
 
 !!! tip "File exclusion"
     Control what gets indexed with `.cgcignore`.
     [**Read the guide**](cgcignore.md)
+
+!!! info "The `graph_name` parameter"
+    Most query and indexing tools below accept an optional `graph_name` argument that targets a specific graph within the active backend — a FalkorDB named graph or a Neo4j database. KùzuDB has no per-graph namespace, so the argument is silently ignored there. Omitting `graph_name` reproduces the prior single-graph behavior via `FALKORDB_GRAPH_NAME` / `NEO4J_DATABASE` env defaults. See [MCP Tools Reference](../../MCP_TOOLS.md#the-graph_name-parameter-cross-cutting) for full details.
+
+## Graph targeting
+
+Use these to discover what graphs the backend exposes and to address them per call.
+
+| Tool name | Description | Natural language example |
+| :--- | :--- | :--- |
+| **`list_graphs`** | Enumerate the graphs the active backend exposes. FalkorDB → `GRAPH.LIST`, Neo4j → `SHOW DATABASES`, KùzuDB → always empty. | "What graphs are available on the backend?" |
 
 ## Context management
 

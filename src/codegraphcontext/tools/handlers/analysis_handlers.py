@@ -6,9 +6,10 @@ def find_dead_code(code_finder: CodeFinder, **args) -> Dict[str, Any]:
     """Tool to find potentially dead code across the entire project."""
     exclude_decorated_with = args.get("exclude_decorated_with", [])
     repo_path = args.get("repo_path")
+    graph_name = args.get("graph_name")
     try:
         debug_log(f"Finding dead code. repo_path={repo_path}")
-        results = code_finder.find_dead_code(exclude_decorated_with=exclude_decorated_with, repo_path=repo_path)
+        results = code_finder.find_dead_code(exclude_decorated_with=exclude_decorated_with, repo_path=repo_path, graph_name=graph_name)
         
         return {
             "success": True,
@@ -24,10 +25,11 @@ def calculate_cyclomatic_complexity(code_finder: CodeFinder, **args) -> Dict[str
     function_name = args.get("function_name")
     path = args.get("path")
     repo_path = args.get("repo_path")
+    graph_name = args.get("graph_name")
 
     try:
         debug_log(f"Calculating cyclomatic complexity for function: {function_name}, repo_path={repo_path}")
-        results = code_finder.get_cyclomatic_complexity(function_name, path, repo_path=repo_path)
+        results = code_finder.get_cyclomatic_complexity(function_name, path, repo_path=repo_path, graph_name=graph_name)
         
         response = {
             "success": True,
@@ -46,9 +48,10 @@ def find_most_complex_functions(code_finder: CodeFinder, **args) -> Dict[str, An
     """Tool to find the most complex functions."""
     limit = args.get("limit", 10)
     repo_path = args.get("repo_path")
+    graph_name = args.get("graph_name")
     try:
         debug_log(f"Finding the top {limit} most complex functions. repo_path={repo_path}")
-        results = code_finder.find_most_complex_functions(limit, repo_path=repo_path)
+        results = code_finder.find_most_complex_functions(limit, repo_path=repo_path, graph_name=graph_name)
         return {
             "success": True,
             "limit": limit,
@@ -64,6 +67,7 @@ def analyze_code_relationships(code_finder: CodeFinder, **args) -> Dict[str, Any
     target = args.get("target")
     context = args.get("context")
     repo_path = args.get("repo_path")
+    graph_name = args.get("graph_name")
 
     if not query_type or not target:
         return {
@@ -74,10 +78,10 @@ def analyze_code_relationships(code_finder: CodeFinder, **args) -> Dict[str, Any
                 "module_deps", "variable_scope", "find_complexity", "find_functions_by_argument", "find_functions_by_decorator"
             ]
         }
-    
+
     try:
         debug_log(f"Analyzing relationships: {query_type} for {target}, repo_path={repo_path}")
-        results = code_finder.analyze_code_relationships(query_type, target, context, repo_path=repo_path)
+        results = code_finder.analyze_code_relationships(query_type, target, context, repo_path=repo_path, graph_name=graph_name)
         
         return {
             "success": True, "query_type": query_type, "target": target,
@@ -93,19 +97,20 @@ def find_code(code_finder: CodeFinder, **args) -> Dict[str, Any]:
     query = args.get("query")
     DEFAULT_EDIT_DISTANCE = 2
     DEFAULT_FUZZY_SEARCH = False
-    
+
     fuzzy_search = args.get("fuzzy_search", DEFAULT_FUZZY_SEARCH)
     edit_distance = args.get("edit_distance", DEFAULT_EDIT_DISTANCE)
     repo_path = args.get("repo_path")
+    graph_name = args.get("graph_name")
 
     if fuzzy_search:
         # Preserve case for Lucene / Levenshtein name matching; lowercasing breaks
         # camelCase fuzzy hits (see GH #758).
         query = query.replace("_", " ").strip()
-        
+
     try:
         debug_log(f"Finding code for query: {query} with fuzzy_search={fuzzy_search}, edit_distance={edit_distance}, repo_path={repo_path}")
-        results = code_finder.find_related_code(query, fuzzy_search, edit_distance, repo_path=repo_path)
+        results = code_finder.find_related_code(query, fuzzy_search, edit_distance, repo_path=repo_path, graph_name=graph_name)
 
         return {"success": True, "query": query, "results": results}
     

@@ -23,7 +23,7 @@ class RepositoryEventHandler(FileSystemEventHandler):
     to build a baseline and then uses this cached state to perform efficient
     updates when files are changed, created, or deleted.
     """
-    def __init__(self, graph_builder: "GraphBuilder", repo_path: Path, debounce_interval=2.0, perform_initial_scan: bool = True):
+    def __init__(self, graph_builder: "GraphBuilder", repo_path: Path, debounce_interval=2.0, perform_initial_scan: bool = True, graph_name: typing.Optional[str] = None):
         """
         Initializes the event handler.
 
@@ -32,17 +32,20 @@ class RepositoryEventHandler(FileSystemEventHandler):
             repo_path: The absolute path to the repository directory to watch.
             debounce_interval: The time in seconds to wait for more changes before processing an event.
             perform_initial_scan: Whether to perform an initial scan of the repository.
+            graph_name: Target graph for all writes triggered by this watcher. When
+                None, uses the backend's env-default.
         """
         super().__init__()
         self.graph_builder = graph_builder
         self.repo_path = repo_path
         self.debounce_interval = debounce_interval
+        self.graph_name = graph_name
         self.timers = {} # A dictionary to manage debounce timers for file paths.
-        
+
         # Caches for the repository's state.
         self.all_file_data = []
         self.imports_map = {}
-        
+
         # Perform the initial scan and linking when the watcher is created.
         if perform_initial_scan:
             self._initial_scan()
@@ -63,8 +66,8 @@ class RepositoryEventHandler(FileSystemEventHandler):
                 self.all_file_data.append(parsed_data)
         
         # 3. After all files are parsed, create the relationships (e.g., function calls) between them.
-        self.graph_builder.link_function_calls(self.all_file_data, self.imports_map)
-        self.graph_builder.link_inheritance(self.all_file_data, self.imports_map)
+        self.graph_builder.link_function_calls(self.all_file_data, self.imports_map, graph_name=self.graph_name)
+        self.graph_builder.link_inheritance(self.all_file_data, self.imports_map, graph_name=self.graph_name)
         # Free memory — all_file_data is only needed during the linking pass.
         self.all_file_data.clear()
         info_logger(f"Initial scan and graph linking complete for: {self.repo_path}")
@@ -130,8 +133,8 @@ class RepositoryEventHandler(FileSystemEventHandler):
         supported_extensions = self.graph_builder.parsers.keys()
 
         # Step 1: Find affected neighbours BEFORE nodes are destroyed.
-        caller_paths = self.graph_builder.get_caller_file_paths(changed_path_str)
-        inheritor_paths = self.graph_builder.get_inheritance_neighbor_paths(changed_path_str)
+        caller_paths = self.graph_builder.get_caller_file_paths(changed_path_str, graph_name=self.graph_name)
+        inheritor_paths = self.graph_builder.get_inheritance_neighbor_paths(changed_path_str, graph_name=self.graph_name)
         affected_paths = {changed_path_str} | caller_paths | inheritor_paths
         info_logger(
             f"[INCREMENTAL] affected={len(affected_paths)} files "
@@ -143,7 +146,7 @@ class RepositoryEventHandler(FileSystemEventHandler):
 
         # Step 3: Delete + re-add nodes for the changed file.
         # DETACH DELETE inside update_file_in_graph removes all CALLS/INHERITS on its nodes.
-        self.graph_builder.update_file_in_graph(changed_path, self.repo_path, self.imports_map)
+        self.graph_builder.update_file_in_graph(changed_path, self.repo_path, self.imports_map, graph_name=self.graph_name)
 
         # Step 4: Clean up CALLS/INHERITS from the affected *caller/inheritor* files.
         # Their CALLS to the changed file were already removed by DETACH DELETE, but their
@@ -152,9 +155,9 @@ class RepositoryEventHandler(FileSystemEventHandler):
         other_callers = list(caller_paths)       # does NOT include changed_path_str
         other_inheritors = list(inheritor_paths)
         if other_callers:
-            self.graph_builder.delete_outgoing_calls_from_files(other_callers)
+            self.graph_builder.delete_outgoing_calls_from_files(other_callers, graph_name=self.graph_name)
         if other_inheritors:
-            self.graph_builder.delete_inherits_for_files(other_inheritors)
+            self.graph_builder.delete_inherits_for_files(other_inheritors, graph_name=self.graph_name)
 
         # Step 5: Re-parse only the affected subset.
         subset_file_data = []
@@ -167,12 +170,12 @@ class RepositoryEventHandler(FileSystemEventHandler):
 
         # Step 6: Get full-repo file_class_lookup from Neo4j (avoids re-parsing all files).
         # The changed file's new classes are already overlaid inside _create_all_function_calls.
-        file_class_lookup = self.graph_builder.get_repo_class_lookup(self.repo_path)
+        file_class_lookup = self.graph_builder.get_repo_class_lookup(self.repo_path, graph_name=self.graph_name)
 
         # Step 7: Re-create CALLS/INHERITS for the affected subset only.
         info_logger(f"[INCREMENTAL] Re-linking {len(subset_file_data)} files...")
-        self.graph_builder.link_function_calls(subset_file_data, self.imports_map, file_class_lookup)
-        self.graph_builder.link_inheritance(subset_file_data, self.imports_map)
+        self.graph_builder.link_function_calls(subset_file_data, self.imports_map, file_class_lookup, graph_name=self.graph_name)
+        self.graph_builder.link_inheritance(subset_file_data, self.imports_map, graph_name=self.graph_name)
         info_logger(f"[INCREMENTAL] Done. Graph refresh for {event_path_str} complete! ✅")
 
     # The following methods are called by the watchdog observer when a file event occurs.
@@ -207,7 +210,7 @@ class CodeWatcher:
         self.watched_paths = set() # Keep track of paths already being watched.
         self.watches = {} # Store watch objects to allow unscheduling
 
-    def watch_directory(self, path: str, perform_initial_scan: bool = True):
+    def watch_directory(self, path: str, perform_initial_scan: bool = True, graph_name: typing.Optional[str] = None):
         """Schedules a directory to be watched for changes."""
         path_obj = Path(path).resolve()
         path_str = str(path_obj)
@@ -215,9 +218,13 @@ class CodeWatcher:
         if path_str in self.watched_paths:
             info_logger(f"Path already being watched: {path_str}")
             return {"message": f"Path already being watched: {path_str}"}
-        
+
         # Create a new, dedicated event handler for this specific repository path.
-        event_handler = RepositoryEventHandler(self.graph_builder, path_obj, perform_initial_scan=perform_initial_scan)
+        event_handler = RepositoryEventHandler(
+            self.graph_builder, path_obj,
+            perform_initial_scan=perform_initial_scan,
+            graph_name=graph_name,
+        )
         
         watch = self.observer.schedule(event_handler, path_str, recursive=True)
         self.watches[path_str] = watch
