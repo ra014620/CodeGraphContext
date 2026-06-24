@@ -293,10 +293,34 @@ class GraphBuilder:
         self.link_function_calls(all_file_data, imports_map, file_class_lookup, graph_name=graph_name)
 
     def link_inheritance(self, all_file_data: list[Dict], imports_map: dict, graph_name: Optional[str] = None) -> None:
-        """Resolve and persist INHERITS / C# IMPLEMENTS (public API)."""
+        """Resolve and persist INHERITS / C# IMPLEMENTS / Go·Haskell·Elixir IMPLEMENTS
+        and related structural links (public API)."""
+        from .indexing.resolution.inheritance import (
+            build_companion_of_links,
+            build_decorated_by_links,
+            build_elixir_implements_links,
+            build_embeds_links,
+            build_go_implements_links,
+            build_haskell_implements_links,
+            build_metaclass_links,
+            build_partial_of_links,
+            build_part_of_links,
+        )
+
         info_logger(f"[INHERITS] Resolving inheritance links across {len(all_file_data)} files...")
         inheritance_batch, csharp_files = build_inheritance_and_csharp_files(all_file_data, imports_map)
-        self._writer_for(graph_name).write_inheritance_links(inheritance_batch, csharp_files, imports_map)
+        implements_batch = build_go_implements_links(all_file_data)
+        implements_batch.extend(build_haskell_implements_links(all_file_data))
+        implements_batch.extend(build_elixir_implements_links(all_file_data))
+        writer = self._writer_for(graph_name)
+        writer.write_inheritance_links(inheritance_batch, csharp_files, imports_map)
+        writer.write_implements_links(implements_batch)
+        writer.write_embeds_links(build_embeds_links(all_file_data))
+        writer.write_companion_of_links(build_companion_of_links(all_file_data))
+        writer.write_partial_of_links(build_partial_of_links(all_file_data))
+        writer.write_part_of_links(build_part_of_links(all_file_data))
+        writer.write_metaclass_links(build_metaclass_links(all_file_data, imports_map))
+        writer.write_decorated_by_links(build_decorated_by_links(all_file_data, imports_map))
 
     def _create_all_inheritance_links(self, all_file_data: list[Dict], imports_map: dict, graph_name: Optional[str] = None) -> None:
         self.link_inheritance(all_file_data, imports_map, graph_name=graph_name)
@@ -309,6 +333,9 @@ class GraphBuilder:
 
     def get_caller_file_paths(self, file_path_str: str, graph_name: Optional[str] = None) -> set:
         return self._writer_for(graph_name).get_caller_file_paths(file_path_str)
+
+    def get_repo_file_paths(self, repo_path: Path, graph_name: Optional[str] = None) -> set:
+        return self._writer_for(graph_name).get_repo_file_paths(repo_path)
 
     def get_inheritance_neighbor_paths(self, file_path_str: str, graph_name: Optional[str] = None) -> set:
         return self._writer_for(graph_name).get_inheritance_neighbor_paths(file_path_str)

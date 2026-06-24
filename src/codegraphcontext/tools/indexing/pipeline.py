@@ -15,7 +15,18 @@ from .discovery import discover_files_to_index
 from .persistence.writer import GraphWriter
 from .pre_scan import pre_scan_for_imports
 from .resolution.calls import build_function_call_groups
-from .resolution.inheritance import build_inheritance_and_csharp_files
+from .resolution.inheritance import (
+    build_companion_of_links,
+    build_decorated_by_links,
+    build_elixir_implements_links,
+    build_embeds_links,
+    build_go_implements_links,
+    build_haskell_implements_links,
+    build_inheritance_and_csharp_files,
+    build_metaclass_links,
+    build_partial_of_links,
+    build_part_of_links,
+)
 
 
 async def run_tree_sitter_index_async(
@@ -49,7 +60,7 @@ async def run_tree_sitter_index_async(
     debug_log(f"Pre-scan complete. Found {len(imports_map)} definitions.")
 
     all_file_data: List[Dict[str, Any]] = []
-    resolved_repo_path_str = str(path.resolve()) if path.is_dir() else str(path.parent.resolve())
+    resolved_repo_path_str = path.resolve().as_posix() if path.is_dir() else path.parent.resolve().as_posix()
 
     processed_count = 0
     concurrency_limit = 10
@@ -70,16 +81,8 @@ async def run_tree_sitter_index_async(
                 # 1. Parse file (CPU bound, run in thread)
                 file_data = await asyncio.to_thread(parse_file, repo_path, file, is_dependency)
                 
-                # 2. Write to graph (I/O bound, run in thread)
-                if "error" not in file_data:
-                    await asyncio.to_thread(
-                        writer.add_file_to_graph, 
-                        file_data, repo_name, imports_map, 
-                        repo_path_str=resolved_repo_path_str
-                    )
-                    return file_data
-                elif not file_data.get("unsupported"):
-                    await asyncio.to_thread(add_minimal_file_node, file, repo_path, is_dependency)
+                file_data["_index_repo_path"] = str(repo_path)
+                return file_data
             except Exception as e:
                 error_logger(f"Error indexing file {file}: {e}")
             
@@ -99,6 +102,28 @@ async def run_tree_sitter_index_async(
         if processed_count % 50 == 0:
             info_logger(f"Processed {processed_count}/{len(files)} files...")
 
+    # Parsing remains concurrent, but graph writes are ordered so shared nodes
+    # such as imported modules receive deterministic canonical metadata.
+    for file_data in sorted(all_file_data, key=lambda data: str(data.get("path") or "")):
+        repo_path = Path(file_data.pop("_index_repo_path"))
+        if "error" not in file_data:
+            await asyncio.to_thread(
+                writer.add_file_to_graph,
+                file_data,
+                repo_name,
+                imports_map,
+                repo_path_str=resolved_repo_path_str,
+            )
+        elif not file_data.get("unsupported"):
+            await asyncio.to_thread(
+                add_minimal_file_node,
+                Path(file_data["path"]),
+                repo_path,
+                is_dependency,
+            )
+
+    all_file_data = [file_data for file_data in all_file_data if "error" not in file_data]
+
     info_logger(
         f"File processing complete. {len(all_file_data)} files parsed. "
         f"Starting post-processing phase (inheritance + function calls)..."
@@ -109,7 +134,17 @@ async def run_tree_sitter_index_async(
         job_manager.update_job(job_id, status_message="Resolving inheritance links...")
     info_logger(f"[INHERITS] Resolving inheritance links across {len(all_file_data)} files...")
     inheritance_batch, csharp_files = build_inheritance_and_csharp_files(all_file_data, imports_map)
+    implements_batch = build_go_implements_links(all_file_data)
+    implements_batch.extend(build_haskell_implements_links(all_file_data))
+    implements_batch.extend(build_elixir_implements_links(all_file_data))
     writer.write_inheritance_links(inheritance_batch, csharp_files, imports_map)
+    writer.write_implements_links(implements_batch)
+    writer.write_embeds_links(build_embeds_links(all_file_data))
+    writer.write_companion_of_links(build_companion_of_links(all_file_data))
+    writer.write_partial_of_links(build_partial_of_links(all_file_data))
+    writer.write_part_of_links(build_part_of_links(all_file_data))
+    writer.write_metaclass_links(build_metaclass_links(all_file_data, imports_map))
+    writer.write_decorated_by_links(build_decorated_by_links(all_file_data, imports_map))
     t1 = time.time()
     info_logger(f"Inheritance links created in {t1 - t0:.1f}s. Starting function calls...")
 
@@ -220,7 +255,7 @@ async def run_tree_sitter_index_async(
             job_manager.update_job(job_id, status_message="Generating embeddings...")
         try:
             from .embeddings import EmbeddingPipeline
-            repo_path_str = str(path.resolve())
+            repo_path_str = path.resolve().as_posix()
             info_logger("[EMBED] Starting embedding pipeline...")
             EmbeddingPipeline(writer.driver).run(repo_path_str)
             info_logger("[EMBED] Embedding pipeline complete.")
@@ -240,7 +275,7 @@ async def run_tree_sitter_index_async(
                     vector_resolver = VectorResolver(writer.driver)
                 except Exception as _ve:
                     info_logger(f"[VECTOR] Resolver unavailable: {_ve}")
-            repo_path_str = str(path.resolve())
+            repo_path_str = path.resolve().as_posix()
             improved = run_inheritance_reresolve(writer.driver, repo_path_str, vector_resolver)
             info_logger(f"[INHERIT-RESOLVE] Post-resolution complete: {improved} edges improved")
         except Exception as _ie:

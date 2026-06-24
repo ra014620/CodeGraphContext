@@ -108,3 +108,54 @@ enum Direction: String, Drawable {
     assert set(enums_by_name["Direction"]["bases"]) == {"String", "Drawable"}
 
     assert classes_by_name["BaseShape"]["bases"] == []
+
+
+def test_typed_property_annotations_drive_receiver_call_inference(swift_parser, temp_test_dir):
+    """Receiver-qualified calls (`repo.foo()`) must resolve.
+
+    The Swift grammar nests the annotated type as
+    ``type_annotation -> [optional_type ->] user_type -> type_identifier``.
+    A flat scan for a direct ``type_identifier`` child left typed properties
+    as ``Unknown``, so the type inference in `_parse_calls` produced no
+    ``inferred_obj_type`` and every receiver-qualified method call on an
+    injected repository/manager (the dominant MVVM/DI call shape) was dropped
+    from the call graph.
+    """
+    code = """
+class LockViewModel {
+    let mqttRequestsManager: MQTTRequestsManager
+    private let authRepository: AuthRepository
+    var queueService: QueueService?
+    let widgets: [Widget]
+
+    func triggerLocking() {
+        checkForOutage()
+        mqttRequestsManager.performRemoteCommand("lock")
+        let result = authRepository.isUSCustomer()
+        queueService?.enqueue()
+    }
+
+    func checkForOutage() {}
+}
+"""
+    f = temp_test_dir / "lock_view_model.swift"
+    f.write_text(code)
+
+    result = swift_parser.parse(f)
+
+    var_types = {v["name"]: v["type"] for v in result["variables"]}
+    assert var_types.get("mqttRequestsManager") == "MQTTRequestsManager"
+    assert var_types.get("authRepository") == "AuthRepository"
+    # Optionals unwrap to the underlying nominal type.
+    assert var_types.get("queueService") == "QueueService"
+    # Collection receivers are deliberately left Unknown — `[Widget]` is an
+    # Array, not a Widget, so inferring the element type would mis-resolve.
+    assert var_types.get("widgets") == "Unknown"
+
+    inferred = {
+        c["name"]: c.get("inferred_obj_type")
+        for c in result["function_calls"]
+    }
+    assert inferred.get("performRemoteCommand") == "MQTTRequestsManager"
+    assert inferred.get("isUSCustomer") == "AuthRepository"
+    assert inferred.get("enqueue") == "QueueService"

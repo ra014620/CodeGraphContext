@@ -17,7 +17,7 @@ def unwatch_directory(code_watcher, **args) -> Dict[str, Any]:
     """Tool to stop watching a directory."""
     from pathlib import Path
 
-    path = args.get("path")
+    path = args.get("path") or args.get("repo_path")
     if not path:
         return {"error": "Path is a required argument."}
 
@@ -36,7 +36,7 @@ def watch_directory(code_watcher, list_repositories_func, add_code_func, **args)
     Tool implementation to start watching a directory for changes.
     It checks if the path exists, if it's already watched, or if it needs indexing.
     """
-    path = args.get("path")
+    path = args.get("path") or args.get("repo_path")
     graph_name = args.get("graph_name")
     from pathlib import Path
 
@@ -72,11 +72,16 @@ def watch_directory(code_watcher, list_repositories_func, add_code_func, **args)
         is_already_indexed = any_repo_matches_path(indexed_repos, path_obj)
 
         if is_already_indexed:
-            # If already indexed, just start the watcher without a scan
-            code_watcher.watch_directory(path_str, perform_initial_scan=False, graph_name=graph_name)
+            # Reconcile changes made while the watcher was stopped before live updates.
+            code_watcher.watch_directory(
+                path_str,
+                perform_initial_scan=False,
+                sync_on_start=True,
+                graph_name=graph_name,
+            )
             return {
                 "success": True,
-                "message": f"Path '{path_str}' is already indexed. Now watching for live changes."
+                "message": f"Path '{path_str}' is synchronized. Now watching for live changes."
             }
         # Not indexed: add_code_func performs the single indexing pass; the
         # watcher only watches (no redundant initial scan).

@@ -49,7 +49,7 @@ Most query and indexing tools accept an optional `graph_name` parameter that tar
 > ```json
 > {
 >     "tool_name": "watch_directory",
->     "arguments": { "path": "my-project" }
+>     "arguments": { "repo_path": "my-project" }
 > }
 > ```
 

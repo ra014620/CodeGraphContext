@@ -14,9 +14,12 @@ def add_code_to_graph(graph_builder, job_manager, loop, list_repos_func, **args)
     Tool implementation to index a directory of code.
     Runs indexing asynchronously via a background job.
     """
-    path = args.get("path")
+    path = args.get("path") or args.get("repo_path")
     is_dependency = args.get("is_dependency", False)
     graph_name = args.get("graph_name")
+
+    if not path:
+        return {"error": "Path is a required argument (repo_path)."}
 
     try:
         path_obj = Path(path).resolve()

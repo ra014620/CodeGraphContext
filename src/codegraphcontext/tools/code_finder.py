@@ -12,6 +12,21 @@ from ..utils.path_ignore import cypher_path_not_under_ignore_dirs
 
 logger = logging.getLogger(__name__)
 
+_MAX_TRAVERSAL_DEPTH = 20
+
+
+def _sanitize_depth(depth, default: int = 3) -> int:
+    """Coerce and clamp a traversal depth before interpolating it into Cypher.
+
+    The depth value ends up inside the query string (``[:CALLS*1..N]``), so it
+    must be a plain bounded integer to prevent Cypher injection.
+    """
+    try:
+        depth = int(depth)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(depth, _MAX_TRAVERSAL_DEPTH))
+
 
 def _levenshtein_distance(a: str, b: str) -> int:
     """Levenshtein distance for short identifiers (typo-tolerant name search)."""
@@ -147,7 +162,7 @@ class CodeFinder:
         limit: int = 20,
     ) -> Dict[str, Any]:
         """Audit Kotlin function-to-function CALLS edges for multi-target callsites."""
-        repo_path = str(Path(repo_path).resolve()) if repo_path else None
+        repo_path = Path(repo_path).resolve().as_posix() if repo_path else None
         repo_filter = "AND a.path STARTS WITH $repo_path" if repo_path else ""
         query = f"""
             MATCH (a:Function)-[r:CALLS]->(b:Function)
@@ -438,46 +453,73 @@ class CodeFinder:
 
         content_lookup_q = lucene_fuzzy_query if (fuzzy_search and not self._lacks_native_fulltext) else user_query
 
-        results: Dict[str, Any] = {
-            "query": lucene_fuzzy_query if fuzzy_search else user_query,
-            "functions_by_name": self.find_by_function_name(
-                name_lookup_q, fuzzy_search, repo_path, edit_distance, graph_name=graph_name,
+        # Run every search strategy, then MERGE the results by node identity.
+        # The strategies overlap heavily: a node matched by name (e.g. a class
+        # named X) is almost always matched by content too (the literal "X"
+        # appears in its own source), so the same node — and its full source
+        # blob — would otherwise be emitted in several parallel buckets AND
+        # again in a re-ranked copy. That 2-3x fan-out is what pushed a single
+        # find_code call past the MCP token limit. We collapse to one entry per
+        # (path, line_number, name), keeping the highest relevance score and the
+        # union of the strategies that matched it.
+        strategies = [
+            (
+                self.find_by_function_name(
+                    name_lookup_q, fuzzy_search, repo_path, edit_distance, graph_name=graph_name,
+                ),
+                "function_name", 0.9, 0.7,
             ),
-            "classes_by_name": self.find_by_class_name(
-                name_lookup_q, fuzzy_search, repo_path, edit_distance, graph_name=graph_name,
+            (
+                self.find_by_class_name(
+                    name_lookup_q, fuzzy_search, repo_path, edit_distance, graph_name=graph_name,
+                ),
+                "class_name", 0.8, 0.6,
             ),
-            "variables_by_name": self.find_by_variable_name(user_query, repo_path, graph_name=graph_name),  # no fuzzy for variables as they are not using full-text index
-            "content_matches": self.find_by_content(content_lookup_q, repo_path, graph_name=graph_name),
-        }
-        
-        all_results: List[Dict[str, Any]] = []
-        
-        for func in results["functions_by_name"]:
-            func["search_type"] = "function_name"
-            func["relevance_score"] = 0.9 if not func["is_dependency"] else 0.7
-            all_results.append(func)
-        
-        for cls in results["classes_by_name"]:
-            cls["search_type"] = "class_name"
-            cls["relevance_score"] = 0.8 if not cls["is_dependency"] else 0.6
-            all_results.append(cls)
+            (
+                # No fuzzy for variables — they don't use the full-text index.
+                self.find_by_variable_name(user_query, repo_path, graph_name=graph_name),
+                "variable_name", 0.7, 0.5,
+            ),
+            (
+                self.find_by_content(content_lookup_q, repo_path, graph_name=graph_name),
+                "content", 0.6, 0.4,
+            ),
+        ]
 
-        for var in results["variables_by_name"]:
-            var["search_type"] = "variable_name"
-            var["relevance_score"] = 0.7 if not var["is_dependency"] else 0.5
-            all_results.append(var)
-        
-        for content in results["content_matches"]:
-            content["search_type"] = "content"
-            content["relevance_score"] = 0.6 if not content["is_dependency"] else 0.4
-            all_results.append(content)
-        
-        all_results.sort(key=lambda x: x["relevance_score"], reverse=True)
-        
-        results["ranked_results"] = all_results[:15]
-        results["total_matches"] = len(all_results)
-        
-        return results
+        merged: Dict[Any, Dict[str, Any]] = {}
+        for nodes, search_type, score, dep_score in strategies:
+            for node in nodes:
+                relevance = dep_score if node.get("is_dependency") else score
+                identity = (node.get("path"), node.get("line_number"), node.get("name"))
+                existing = merged.get(identity)
+                if existing is None:
+                    node["search_types"] = [search_type]
+                    node["search_type"] = search_type
+                    node["relevance_score"] = relevance
+                    merged[identity] = node
+                    continue
+                if search_type not in existing["search_types"]:
+                    existing["search_types"].append(search_type)
+                if relevance > existing["relevance_score"]:
+                    existing["relevance_score"] = relevance
+                    existing["search_type"] = search_type
+                # Backfill source/docstring if an earlier strategy returned a
+                # leaner row for the same node.
+                if not existing.get("source") and node.get("source"):
+                    existing["source"] = node["source"]
+                if not existing.get("docstring") and node.get("docstring"):
+                    existing["docstring"] = node["docstring"]
+
+        ranked = sorted(merged.values(), key=lambda x: x["relevance_score"], reverse=True)
+
+        # Single deduplicated, relevance-sorted result set. ``total_matches`` is
+        # the count of DISTINCT nodes. Result-size truncation happens once, in
+        # the handler (get_tool_result_limit("find_code")).
+        return {
+            "query": lucene_fuzzy_query if fuzzy_search else user_query,
+            "ranked_results": ranked,
+            "total_matches": len(ranked),
+        }
     
     def find_functions_by_argument(self, argument_name: str, path: Optional[str] = None, repo_path: Optional[str] = None, graph_name: Optional[str] = None) -> List[Dict]:
         """Find functions that take a specific argument name."""
@@ -842,6 +884,7 @@ class CodeFinder:
     
     def find_all_callers(self, function_name: str, path: Optional[str] = None, repo_path: Optional[str] = None, depth: int = 3, graph_name: Optional[str] = None) -> List[Dict]:
         """Find all direct and indirect callers of a specific function, returning edges."""
+        depth = _sanitize_depth(depth)
         with self._open_session(graph_name=graph_name) as session:
             repo_filter = "AND caller.path STARTS WITH $repo_path" if repo_path else ""
             depth_str = f"1..{depth}" if depth > 1 else "1"
@@ -883,6 +926,7 @@ class CodeFinder:
 
     def find_all_callees(self, function_name: str, path: Optional[str] = None, repo_path: Optional[str] = None, depth: int = 3, graph_name: Optional[str] = None) -> List[Dict]:
         """Find all direct and indirect callees of a specific function, returning edges."""
+        depth = _sanitize_depth(depth)
         with self._open_session(graph_name=graph_name) as session:
             repo_filter = "AND callee.path STARTS WITH $repo_path" if repo_path else ""
             depth_str = f"1..{depth}" if depth > 1 else "1"

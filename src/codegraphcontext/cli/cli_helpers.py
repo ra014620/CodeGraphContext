@@ -35,6 +35,7 @@ from .config_manager import (
     register_repo_in_context,
     ensure_first_run_bootstrap,
     ContextNotFoundError,
+    is_db_deletion_allowed,
 )
 
 console = Console()
@@ -198,9 +199,9 @@ def _initialize_services(
     return db_manager, graph_builder, code_finder, ctx
 
 
-async def _run_index_with_progress(graph_builder: GraphBuilder, path_obj: Path, is_dependency: bool = False, cgcignore_path: str = None):
+async def _run_index_with_progress(graph_builder: GraphBuilder, path_obj: Path, is_dependency: bool = False, cgcignore_path: str = None, graph_name: Optional[str] = None):
     """Internal helper to run indexing with a Live progress bar."""
-    job_id = graph_builder.job_manager.create_job(str(path_obj), is_dependency=is_dependency)
+    job_id = graph_builder.job_manager.create_job(str(path_obj), is_dependency=is_dependency, graph_name=graph_name)
     
     # Create the progress bar
     with Progress(
@@ -222,7 +223,7 @@ async def _run_index_with_progress(graph_builder: GraphBuilder, path_obj: Path, 
         )
 
         indexing_task = asyncio.create_task(
-            graph_builder.build_graph_from_path_async(path_obj, is_dependency=is_dependency, job_id=job_id, cgcignore_path=cgcignore_path)
+            graph_builder.build_graph_from_path_async(path_obj, is_dependency=is_dependency, job_id=job_id, cgcignore_path=cgcignore_path, graph_name=graph_name)
         )
 
         from ..core.jobs import JobStatus
@@ -256,10 +257,14 @@ async def _run_index_with_progress(graph_builder: GraphBuilder, path_obj: Path, 
             raise e
 
 
-def index_helper(path: str, context: Optional[str] = None):
+def index_helper(path: str, context: Optional[str] = None, graph_name: Optional[str] = None):
     """Synchronously indexes a repository in a given context."""
     time_start = time.time()
     path_obj = Path(path).resolve()
+    # Normalize to forward slashes for cross-platform DB consistency.
+    # The graph DB always stores paths via Path.resolve().as_posix(),
+    # so Cypher queries must also use forward slashes on Windows.
+    repo_path_str = path_obj.as_posix()
     index_cwd = path_obj if path_obj.is_dir() else path_obj.parent
     services = _initialize_services(context, cwd=index_cwd)
     if not all(services[:3]):
@@ -272,7 +277,7 @@ def index_helper(path: str, context: Optional[str] = None):
         db_manager.close_driver()
         raise typer.Exit(code=1)
 
-    indexed_repos = code_finder.list_indexed_repositories()
+    indexed_repos = code_finder.list_indexed_repositories(graph_name=graph_name)
     repo_exists = any_repo_matches_path(indexed_repos, path_obj)
 
     if repo_exists:
@@ -280,10 +285,10 @@ def index_helper(path: str, context: Optional[str] = None):
         # Use variable-length path to handle both flat (Repository->File) and
         # hierarchical (Repository->Directory->...->File) graph structures
         try:
-            with db_manager.get_driver().session() as session:
+            with db_manager.get_driver(graph_name=graph_name).session() as session:
                 result = session.run(
                     "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(f:File) RETURN count(DISTINCT f) as file_count",
-                    path=str(path_obj)
+                    path=repo_path_str
                 )
                 record = result.single()
                 file_count = record["file_count"] if record else 0
@@ -306,7 +311,7 @@ def index_helper(path: str, context: Optional[str] = None):
     console.print(f"Starting indexing for: {path_obj}")
 
     try:
-        asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path))
+        asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path, graph_name=graph_name))
         time_end = time.time()
         elapsed = time_end - time_start
         _print_call_resolution_diagnostics(graph_builder)
@@ -319,7 +324,7 @@ def index_helper(path: str, context: Optional[str] = None):
             if auto_watch and str(auto_watch).lower() == 'true':
                 console.print("\n[cyan]🔍 ENABLE_AUTO_WATCH is enabled. Starting watcher...[/cyan]")
                 db_manager.close_driver()  # Close before starting watcher
-                watch_helper(path)  # This will block the terminal
+                watch_helper(path, graph_name=graph_name)  # This will block the terminal
                 return  # watch_helper handles its own cleanup
         except Exception as e:
             console.print(f"[yellow]Warning: Could not check ENABLE_AUTO_WATCH: {e}[/yellow]")
@@ -331,7 +336,7 @@ def index_helper(path: str, context: Optional[str] = None):
         db_manager.close_driver()
 
 
-def add_package_helper(package_name: str, language: str, context: Optional[str] = None):
+def add_package_helper(package_name: str, language: str, context: Optional[str] = None, graph_name: Optional[str] = None):
     """Synchronously indexes a package."""
     services = _initialize_services(context)
     if not all(services[:3]):
@@ -347,7 +352,7 @@ def add_package_helper(package_name: str, language: str, context: Optional[str] 
 
     package_path = Path(package_path_str)
     
-    indexed_repos = code_finder.list_indexed_repositories()
+    indexed_repos = code_finder.list_indexed_repositories(graph_name=graph_name)
     if any(repo.get("name") == package_name for repo in indexed_repos if repo.get("is_dependency")):
         console.print(f"[yellow]Package '{package_name}' is already indexed. Skipping.[/yellow]")
         db_manager.close_driver()
@@ -356,7 +361,7 @@ def add_package_helper(package_name: str, language: str, context: Optional[str] 
     console.print(f"Starting indexing for package '{package_name}' at: {package_path}")
 
     try:
-        asyncio.run(_run_index_with_progress(graph_builder, package_path, is_dependency=True, cgcignore_path=ctx.cgcignore_path))
+        asyncio.run(_run_index_with_progress(graph_builder, package_path, is_dependency=True, cgcignore_path=ctx.cgcignore_path, graph_name=graph_name))
         _print_call_resolution_diagnostics(graph_builder)
         console.print(f"[green]Successfully finished indexing package: {package_name}[/green]")
     except Exception as e:
@@ -415,6 +420,49 @@ def delete_helper(repo_path: str, context: Optional[str] = None):
     finally:
         db_manager.close_driver()
 
+def _print_query_exception(e: Exception, query: str) -> None:
+    """
+    Pretty-print a database query exception, surfacing the raw driver
+    error message so Cypher syntax problems are clearly visible.
+    """
+    import traceback
+
+    error_type = type(e).__name__
+    error_module = type(e).__module__ or ""
+
+    # Neo4j: CypherSyntaxError and other ClientError subclasses carry
+    # a .message and .code attribute with the full server-side detail.
+    if "neo4j" in error_module:
+        code = getattr(e, "code", None)
+        msg = getattr(e, "message", None) or str(e)
+        console.print(f"[bold red]Query Error ({error_type}):[/bold red]")
+        if code:
+            console.print(f"  [yellow]Code:[/yellow] {code}")
+        console.print(f"  [yellow]Message:[/yellow] {msg}")
+
+    # FalkorDB: ResponseError / exceptions in falkordb or redis packages
+    elif "falkordb" in error_module or "redis" in error_module:
+        console.print(f"[bold red]Query Error ({error_type}):[/bold red]")
+        console.print(f"  [yellow]Database message:[/yellow] {e}")
+
+    # KuzuDB: RuntimeError from the kuzu extension
+    # KuzuDB: RuntimeError from the kuzu extension or database_kuzu wrapper
+    elif "kuzu" in error_module or (
+        error_type == "RuntimeError" and "Parser exception" in str(e)
+    ):
+        console.print(f"[bold red]Query Error ({error_type}):[/bold red]")
+        console.print(f"  [yellow]Database message:[/yellow] {e}")
+
+    else:
+        # Fallback: unknown backend — print type + message + traceback
+        console.print(f"[bold red]An error occurred while executing query ({error_type}):[/bold red]")
+        console.print(f"  [yellow]Message:[/yellow] {e}")
+        console.print("[dim]--- Traceback ---[/dim]")
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+    console.print(f"\n[dim]Failed query:[/dim]")
+    console.print(f"[dim]  {query}[/dim]")
+
 
 def cypher_helper(query: str, context: Optional[str] = None):
     """Executes a read-only Cypher query."""
@@ -440,7 +488,7 @@ def cypher_helper(query: str, context: Optional[str] = None):
             records = [record.data() for record in result]
             console.print(json.dumps(records, indent=2))
     except Exception as e:
-        console.print(f"[bold red]An error occurred while executing query:[/bold red] {e}")
+        _print_query_exception(e, query)
         db_manager.close_driver()
         raise typer.Exit(code=1)
     finally:
@@ -466,7 +514,7 @@ def cypher_helper_visual(query: str, context: Optional[str] = None):
     try:
         visualize_cypher_results(query)
     except Exception as e:
-        console.print(f"[bold red]An error occurred while executing query:[/bold red] {e}")
+        _print_query_exception(e, query)
         db_manager.close_driver()
         raise typer.Exit(code=1)
     finally:
@@ -581,7 +629,7 @@ def visualize_helper(
         db_manager.close_driver()
 
 
-def reindex_helper(path: str, context: Optional[str] = None):
+def reindex_helper(path: str, context: Optional[str] = None, graph_name: Optional[str] = None):
     """Force re-index by deleting and rebuilding the repository."""
     time_start = time.time()
     path_obj = Path(path).resolve()
@@ -598,13 +646,13 @@ def reindex_helper(path: str, context: Optional[str] = None):
         raise typer.Exit(code=1)
 
     # Check if already indexed
-    indexed_repos = code_finder.list_indexed_repositories()
+    indexed_repos = code_finder.list_indexed_repositories(graph_name=graph_name)
     repo_exists = any_repo_matches_path(indexed_repos, path_obj)
 
     if repo_exists:
         console.print(f"[yellow]Deleting existing index for: {path_obj}[/yellow]")
         try:
-            graph_builder.delete_repository_from_graph(str(path_obj))
+            graph_builder.delete_repository_from_graph(str(path_obj), graph_name=graph_name)
             console.print("[green]✓[/green] Deleted old index")
         except Exception as e:
             console.print(f"[red]Error deleting old index: {e}[/red]")
@@ -614,7 +662,7 @@ def reindex_helper(path: str, context: Optional[str] = None):
     console.print(f"[cyan]Re-indexing: {path_obj}[/cyan]")
     
     try:
-        asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path))
+        asyncio.run(_run_index_with_progress(graph_builder, path_obj, is_dependency=False, cgcignore_path=ctx.cgcignore_path, graph_name=graph_name))
         time_end = time.time()
         elapsed = time_end - time_start
         _print_call_resolution_diagnostics(graph_builder)
@@ -626,14 +674,32 @@ def reindex_helper(path: str, context: Optional[str] = None):
         db_manager.close_driver()
 
 
-def update_helper(path: str, context: Optional[str] = None):
-    """Update/refresh index for a path (alias for reindex)."""
+def update_helper(path: str, context: Optional[str] = None, quiet: bool = False, graph_name: Optional[str] = None):
+    """Update/refresh index for a path (alias for reindex).
+
+    When *quiet* is True (e.g. when invoked from Git hooks with --quiet),
+    Rich console output, including progress rendering, is suppressed.
+    """
+    if quiet:
+        console.quiet = True
+        try:
+            reindex_helper(path, context, graph_name=graph_name)
+        finally:
+            console.quiet = False
+        return
     console.print("[cyan]Updating repository index...[/cyan]")
-    reindex_helper(path, context)
+    reindex_helper(path, context, graph_name=graph_name)
 
 
 def clean_helper(context: Optional[str] = None):
     """Remove orphaned nodes and relationships from the database."""
+    if not is_db_deletion_allowed():
+        console.print(
+            "[bold red]Error:[/bold red] Database cleanup is disabled. "
+            "Set ALLOW_DB_DELETION=true in config to enable."
+        )
+        raise typer.Exit(code=1)
+
     services = _initialize_services(context)
     if not all(services[:3]):
         _fail_services_init()
@@ -691,6 +757,9 @@ def stats_helper(path: str = None, context: Optional[str] = None):
         if path:
             # Stats for specific repository
             path_obj = Path(path).resolve()
+            # Paths are stored with forward slashes (as_posix) in the graph DB,
+            # so lookups must use the same normalization on Windows too.
+            repo_path_str = path_obj.as_posix()
             console.print(f"[cyan]📊 Statistics for: {path_obj}[/cyan]\n")
             
             with db_manager.get_driver().session() as session:
@@ -699,7 +768,7 @@ def stats_helper(path: str = None, context: Optional[str] = None):
                 MATCH (r:Repository {path: $path})
                 RETURN r
                 """
-                result = session.run(repo_query, path=str(path_obj))
+                result = session.run(repo_query, path=repo_path_str)
                 if not result.single():
                     console.print(f"[red]Repository not found: {path_obj}[/red]")
                     return
@@ -708,20 +777,20 @@ def stats_helper(path: str = None, context: Optional[str] = None):
                 # Get stats using separate queries to handle depth and avoid Cartesian products
                 # 1. Files
                 file_query = "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(f:File) RETURN count(f) as c"
-                file_count = session.run(file_query, path=str(path_obj)).single()["c"]
+                file_count = session.run(file_query, path=repo_path_str).single()["c"]
                 
                 # 2. Functions (including methods in classes)
                 func_query = "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(func:Function) RETURN count(func) as c"
-                func_count = session.run(func_query, path=str(path_obj)).single()["c"]
+                func_count = session.run(func_query, path=repo_path_str).single()["c"]
                 
                 # 3. Classes
                 class_query = "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(c:Class) RETURN count(c) as c"
-                class_count = session.run(class_query, path=str(path_obj)).single()["c"]
+                class_count = session.run(class_query, path=repo_path_str).single()["c"]
                 
                 # 4. Modules (imported) - Note: Module nodes are outside the repo structure usually, connected via IMPORTS
                 # We need to traverse from files to modules
                 module_query = "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(f:File)-[:IMPORTS]->(m:Module) RETURN count(DISTINCT m) as c"
-                module_count = session.run(module_query, path=str(path_obj)).single()["c"]
+                module_count = session.run(module_query, path=repo_path_str).single()["c"]
 
                 table = Table(show_header=True, header_style="bold magenta")
                 table.add_column("Metric", style="cyan")
@@ -781,7 +850,7 @@ def stats_helper(path: str = None, context: Optional[str] = None):
         db_manager.close_driver()
 
 
-def watch_helper(path: str, context: Optional[str] = None, use_polling: Optional[bool] = None):
+def watch_helper(path: str, context: Optional[str] = None, use_polling: Optional[bool] = None, graph_name: Optional[str] = None):
     """Watch a directory for changes and auto-update the graph (blocking mode)."""
     import logging
     from ..core.watcher import CodeWatcher
@@ -813,16 +882,16 @@ def watch_helper(path: str, context: Optional[str] = None, use_polling: Optional
     # Check if already indexed — use File node count as a robust fallback so a
     # transient empty result from list_indexed_repositories never triggers a
     # destructive full rescan of an already-populated graph.
-    indexed_repos = code_finder.list_indexed_repositories()
+    indexed_repos = code_finder.list_indexed_repositories(graph_name=graph_name)
     is_indexed = any_repo_matches_path(indexed_repos, path_obj)
     if not is_indexed:
         # Fallback: count File nodes whose path starts with this repo's path.
         # If > 100 exist, the repo is clearly already indexed — skip the scan.
         try:
-            with code_finder._open_session() as _s:
+            with code_finder._open_session(graph_name=graph_name) as _s:
                 _r = _s.run(
                     "MATCH (n:File) WHERE n.path STARTS WITH $p RETURN count(n) AS c",
-                    p=str(path_obj) + "/"
+                    p=path_obj.as_posix() + "/"
                 )
                 _count = _r.single()["c"]
             if _count > 100:
@@ -844,31 +913,35 @@ def watch_helper(path: str, context: Optional[str] = None, use_polling: Optional
         
         # Add the directory to watch
         if is_indexed:
-            console.print("[green]✓[/green] Already indexed (no initial scan needed)")
+            console.print("[green]✓[/green] Already indexed. Synchronizing current files...")
             watcher.watch_directory(
                 str(path_obj),
                 perform_initial_scan=False,
+                sync_on_start=True,
                 cgcignore_path=ctx.cgcignore_path,
+                graph_name=graph_name,
             )
         else:
             console.print("[yellow]⚠[/yellow]  Not indexed yet. Performing initial scan...")
-            
+
             # Index the repository first (like MCP does)
             async def do_index():
                 await graph_builder.build_graph_from_path_async(
                     path_obj,
                     is_dependency=False,
                     cgcignore_path=ctx.cgcignore_path,
+                    graph_name=graph_name,
                 )
-            
+
             asyncio.run(do_index())
             console.print("[green]✓[/green] Initial scan complete")
-            
+
             # Now start watching (without another scan)
             watcher.watch_directory(
                 str(path_obj),
                 perform_initial_scan=False,
                 cgcignore_path=ctx.cgcignore_path,
+                graph_name=graph_name,
             )
         
         console.print("[bold green]👀 Monitoring for file changes...[/bold green] (Press Ctrl+C to stop)")

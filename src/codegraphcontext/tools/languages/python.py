@@ -183,8 +183,6 @@ class PythonTreeSitterParser:
             call for call in function_calls
             if not call.get("context") or call["context"][0] is None
         ]
-        if not module_level_calls:
-            return
 
         has_module_frame = any(
             func.get("name") == "<module>" and func.get("line_number") == 1
@@ -338,8 +336,16 @@ class PythonTreeSitterParser:
                 superclasses_node = class_node.child_by_field_name('superclasses')
                 
                 bases = []
+                metaclass = None
                 if superclasses_node:
-                    bases = [self._get_node_text(child) for child in superclasses_node.children if child.type in ('identifier', 'attribute')]
+                    for child in superclasses_node.children:
+                        if child.type == 'keyword_argument':
+                            kw_name = child.child_by_field_name('name')
+                            kw_value = child.child_by_field_name('value')
+                            if kw_name and kw_value and self._get_node_text(kw_name) == 'metaclass':
+                                metaclass = self._get_node_text(kw_value)
+                        elif child.type in ('identifier', 'attribute'):
+                            bases.append(self._get_node_text(child))
 
                 decorators = [self._get_node_text(child) for child in class_node.children if child.type == 'decorator']
 
@@ -355,6 +361,8 @@ class PythonTreeSitterParser:
                     "lang": self.language_name,
                     "is_dependency": False,
                 }
+                if metaclass:
+                    class_data["metaclass"] = metaclass
                 if self.index_source:
                     class_data["source"] = self._get_node_text(class_node)
                     class_data["docstring"] = self._get_docstring(body_node)
@@ -364,7 +372,7 @@ class PythonTreeSitterParser:
 
     def _find_imports(self, root_node):
         imports = []
-        seen_modules = set()
+        seen_modules = {}
         query_str = PY_QUERIES['imports']
         # Process captures in source order. The query engine (tree-sitter
         # QueryCursor) may return captures grouped by name rather than by
@@ -389,10 +397,6 @@ class PythonTreeSitterParser:
                     else:
                         full_name = node_text.strip()
 
-                    if full_name in seen_modules:
-                        continue
-                    seen_modules.add(full_name)
-
                     import_data = {
                         "name": full_name,
                         "full_import_name": full_name,
@@ -402,7 +406,9 @@ class PythonTreeSitterParser:
                         "lang": self.language_name,
                         "is_dependency": False,
                     }
-                    imports.append(import_data)
+                    existing = seen_modules.get(full_name)
+                    if existing is None or import_data["line_number"] < existing["line_number"]:
+                        seen_modules[full_name] = import_data
                 # For 'import_from_statement'
                 elif capture_name == 'from_import_stmt':
                     module_name_node = node.child_by_field_name('module_name')
@@ -426,10 +432,7 @@ class PythonTreeSitterParser:
                             
                             if imported_name:
                                 full_import_name = f"{module_name}.{imported_name}"
-                                if full_import_name in seen_modules:                                                                                                
-                                    continue                                                                                                                        
-                                seen_modules.add(full_import_name) 
-                                imports.append({
+                                import_data = {
                                     "name": imported_name,
                                     "full_import_name": full_import_name,
                                     "line_number": child.start_point[0] + 1,
@@ -437,8 +440,12 @@ class PythonTreeSitterParser:
                                     "context": self._get_parent_context(child)[:2],
                                     "lang": self.language_name,
                                     "is_dependency": False,
-                                })
+                                }
+                                existing = seen_modules.get(full_import_name)
+                                if existing is None or import_data["line_number"] < existing["line_number"]:
+                                    seen_modules[full_import_name] = import_data
 
+        imports.extend(sorted(seen_modules.values(), key=lambda item: item["line_number"]))
         return imports
 
     def _extract_call_name(self, function_node) -> str:
