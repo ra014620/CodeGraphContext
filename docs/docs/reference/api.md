@@ -26,7 +26,23 @@ The server loads credentials from the same configuration chain as the CLI (`~/.c
 | `GET` | `/` | Simple HTML landing page with links to OpenAPI docs. |
 | `GET` | `/api/v1/status` | Database connectivity and active backend name. |
 
-### MCP-over-SSE
+### MCP over Streamable HTTP (recommended)
+
+Single-endpoint transport per the current MCP spec. Handles the full session
+lifecycle on one URL; the client sends the `Mcp-Session-Id` header returned by
+`initialize` on subsequent requests.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/mcp/http` | JSON-RPC requests/notifications. Responds with `application/json` or a `text/event-stream`. |
+| `GET` | `/api/v1/mcp/http` | Opens the server→client SSE stream for an existing session. |
+| `DELETE` | `/api/v1/mcp/http` | Terminates the session. |
+
+Clients must send `Accept: application/json, text/event-stream`.
+
+### MCP-over-SSE (legacy)
+
+Deprecated two-endpoint HTTP+SSE transport, kept for older clients.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |

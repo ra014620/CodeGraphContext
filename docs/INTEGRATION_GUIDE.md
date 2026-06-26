@@ -29,12 +29,16 @@ ChatGPT now supports the **Model Context Protocol (MCP)** natively. This allows 
     - Go to **Settings** -> **Connected accounts** -> **Connectors** (or "MCP Servers").
     - Click **Add MCP Server**.
     - **Name**: CodeGraphContext
-    - **MCP Server URL**: `https://your-id.ngrok-free.app/api/v1/mcp/sse`
+    - **MCP Server URL**: `https://your-id.ngrok-free.app/api/v1/mcp/http`
     - **Authentication**: No Auth
     - Click **Create**.
 
 > [!TIP]
-> If you get a **405 Method Not Allowed** error, ensure you are using the full path `/api/v1/mcp/sse` in the URL field.
+> `/api/v1/mcp/http` is the modern Streamable HTTP transport (recommended). Clients
+> that only support the older HTTP+SSE transport can use `/api/v1/mcp/sse` instead.
+
+> [!TIP]
+> If you get a **405 Method Not Allowed** error, ensure you are using the full path (`/api/v1/mcp/http` or `/api/v1/mcp/sse`) in the URL field.
 
 ### Option B: Custom GPT Actions (Legacy/Alternative)
 If you prefer to create a custom GPT with a specific focus:

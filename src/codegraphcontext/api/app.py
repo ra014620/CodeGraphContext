@@ -3,14 +3,23 @@ import os
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.routing import Route
 from .router import router
 from .mcp_sse import handle_sse, handle_messages
+from .mcp_http import create_streamable_http
 
 def create_app() -> FastAPI:
+    # Build a per-app Streamable HTTP endpoint + lifespan (the session manager's
+    # task group may only be started once per instance).
+    streamable_http_app, streamable_http_lifespan = create_streamable_http()
+
     app = FastAPI(
         title="CodeGraphContext Gateway",
         description="HTTP API gateway for CodeGraphContext MCP server. Enables integration with ChatGPT Actions, Claude, and web frontends.",
-        version="0.1.0"
+        version="0.1.0",
+        # Drive the Streamable HTTP session manager's task group for the app
+        # lifetime; required before any /mcp request is handled.
+        lifespan=streamable_http_lifespan,
     )
 
     # Enable CORS for the website/frontend
@@ -32,9 +41,14 @@ def create_app() -> FastAPI:
         """Liveness probe for load balancers and k8s."""
         return {"status": "ok"}
 
-    # MCP-over-SSE Endpoints
+    # MCP-over-SSE Endpoints (legacy HTTP+SSE transport, two endpoints)
     app.add_api_route("/api/v1/mcp/sse", handle_sse, methods=["GET"])
     app.add_api_route("/api/v1/mcp/messages", handle_messages, methods=["POST"])
+
+    # MCP Streamable HTTP transport (single endpoint; GET/POST/DELETE).
+    # Registered as a Route with a raw ASGI endpoint so the exact path works
+    # for all methods without a trailing-slash redirect.
+    app.router.routes.append(Route("/api/v1/mcp/http", endpoint=streamable_http_app))
 
     @app.get("/", response_class=HTMLResponse)
     async def root():
