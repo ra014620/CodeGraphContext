@@ -166,6 +166,16 @@ def find_code(code_finder: CodeFinder, **args) -> Dict[str, Any]:
 _SPRING_ROW_LIMIT = 100
 
 
+def _graph_driver(code_finder: CodeFinder, args: Dict[str, Any]):
+    """Driver for the graph this call asked for (``graph_name``), else the default.
+
+    The tool schemas advertise ``graph_name`` for these tools; passing it
+    explicitly keeps the query on the requested graph instead of whatever
+    ``code_finder.driver`` currently resolves to.
+    """
+    return code_finder.db_manager.get_driver(args.get("graph_name"))
+
+
 def find_java_spring_endpoints(code_finder: CodeFinder, **args) -> Dict[str, Any]:
     """Return all Spring HTTP endpoint functions, optionally filtered by method or path."""
     http_method = args.get("http_method")
@@ -199,7 +209,7 @@ def find_java_spring_endpoints(code_finder: CodeFinder, **args) -> Dict[str, Any
     """
 
     try:
-        with code_finder.driver.session() as session:
+        with _graph_driver(code_finder, args).session() as session:
             result = session.run(query, **params)
             rows = [dict(r) for r in result]
         response = {"success": True, "endpoints": rows, "count": len(rows)}
@@ -242,7 +252,7 @@ def find_java_spring_beans(code_finder: CodeFinder, **args) -> Dict[str, Any]:
     """
 
     try:
-        with code_finder.driver.session() as session:
+        with _graph_driver(code_finder, args).session() as session:
             result = session.run(query, **params)
             rows = [dict(r) for r in result]
         response = {"success": True, "beans": rows, "count": len(rows)}
@@ -298,12 +308,12 @@ def find_datasource_nodes(code_finder: CodeFinder, **args) -> Dict[str, Any]:
     """
 
     try:
-        with code_finder.driver.session() as session:
+        with _graph_driver(code_finder, args).session() as session:
             ds_rows = [dict(r) for r in session.run(table_query, **params)]
 
         redis_kp: Dict[str, Any] = {}
         try:
-            with code_finder.driver.session() as session:
+            with _graph_driver(code_finder, args).session() as session:
                 for r in session.run(kp_query, **params):
                     redis_kp[r["datasource"]] = r["key_patterns"]
         except Exception:
@@ -321,7 +331,7 @@ def find_datasource_nodes(code_finder: CodeFinder, **args) -> Dict[str, Any]:
                 ORDER BY table_fqn, col_name
             """
             try:
-                with code_finder.driver.session() as session:
+                with _graph_driver(code_finder, args).session() as session:
                     for r in session.run(col_query, **params):
                         fqn = r["table_fqn"]
                         columns_by_table.setdefault(fqn, []).append({

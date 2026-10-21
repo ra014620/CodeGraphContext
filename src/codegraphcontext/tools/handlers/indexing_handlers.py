@@ -9,6 +9,48 @@ from ...utils.repo_path import repo_record_matches_path
 from ..package_resolver import get_local_package_path
 
 
+_MULTI_GRAPH_BACKENDS = ("falkordb", "falkordb-remote")
+
+
+def _scope_to_graph(graph_builder, job_manager, loop, graph_name):
+    """Return ``(builder, error)`` for indexing into ``graph_name``.
+
+    On multi-graph backends (FalkorDB) a GraphBuilder scoped to the named graph
+    is constructed, so its writer and schema bind to ``get_driver(graph_name)``.
+    Single-graph backends would silently ignore the name and land the code in
+    the default graph (#1558), so they refuse explicitly. With no graph_name
+    the shared builder is returned unchanged.
+    """
+    if not graph_name:
+        return graph_builder, None
+    backend = graph_builder.db_manager.get_backend_type()
+    if backend in _MULTI_GRAPH_BACKENDS:
+        from ..graph_builder import GraphBuilder
+        return GraphBuilder(graph_builder.db_manager, job_manager, loop, graph_name=graph_name), None
+    return None, {
+        "error": (
+            f"The active backend ({backend}) is single-graph, so "
+            f"graph_name={graph_name!r} cannot be honoured. Omit it to "
+            "index into the default graph, or select a graph via the CLI "
+            "context (`cgc context create` / `cgc index --context`)."
+        ),
+        "unsupported_argument": "graph_name",
+    }
+
+
+def _indexed_repos(graph_builder, graph_name, list_repos_func):
+    """Repositories already indexed in the target graph.
+
+    ``list_repos_func`` reads the default graph only, so for a named graph the
+    named graph itself is queried: re-indexing the same path into a *different*
+    graph is legitimate, into the *same* graph is a duplicate.
+    """
+    if not graph_name:
+        return list_repos_func().get("repositories", [])
+    from ..code_finder import CodeFinder
+    return CodeFinder(graph_builder.db_manager).list_indexed_repositories(graph_name=graph_name)
+
+
 def add_code_to_graph(graph_builder, job_manager, loop, list_repos_func, **args) -> Dict[str, Any]:
     """
     Tool implementation to index a directory of code.
@@ -20,29 +62,10 @@ def add_code_to_graph(graph_builder, job_manager, loop, list_repos_func, **args)
     if not path:
         return {"error": "Path is a required argument (repo_path)."}
 
-    # Indexing into a named graph is supported on multi-graph backends
-    # (FalkorDB): a scoped GraphBuilder is constructed whose writer binds to
-    # get_driver(graph_name). Single-graph backends (KùzuDB/LadybugDB/Neo4j)
-    # would silently ignore the name and land the repo in the default graph —
-    # the exact lie #1558 is about — so those still refuse explicitly.
     graph_name = args.get("graph_name")
-    if graph_name:
-        backend = graph_builder.db_manager.get_backend_type()
-        if backend in ("falkordb", "falkordb-remote"):
-            from ..graph_builder import GraphBuilder
-            graph_builder = GraphBuilder(
-                graph_builder.db_manager, job_manager, loop, graph_name=graph_name
-            )
-        else:
-            return {
-                "error": (
-                    f"The active backend ({backend}) is single-graph, so "
-                    f"graph_name={graph_name!r} cannot be honoured. Omit it to "
-                    "index into the default graph, or select a graph via the CLI "
-                    "context (`cgc context create` / `cgc index --context`)."
-                ),
-                "unsupported_argument": "graph_name",
-            }
+    graph_builder, scope_error = _scope_to_graph(graph_builder, job_manager, loop, graph_name)
+    if scope_error:
+        return scope_error
     
     try:
         path_obj = Path(path).resolve()
@@ -66,10 +89,8 @@ def add_code_to_graph(graph_builder, job_manager, loop, list_repos_func, **args)
                 "message": f"Path '{path}' does not exist.",
             }
 
-        # Prevent re-indexing the same repository. list_repos_func reads the
-        # default graph, so the check only applies there — a named graph is a
-        # separate namespace and legitimately re-indexes the same path.
-        indexed_repos = [] if graph_name else list_repos_func().get("repositories", [])
+        # Prevent re-indexing the same repository into the same graph.
+        indexed_repos = _indexed_repos(graph_builder, graph_name, list_repos_func)
         for repo in indexed_repos:
             if repo_record_matches_path(repo, path_obj):
                 return {
@@ -114,9 +135,14 @@ def add_package_to_graph(graph_builder, job_manager, loop, list_repos_func, **ar
     if not language:
         return {"error": "The 'language' parameter is required."}
 
+    graph_name = args.get("graph_name")
+    graph_builder, scope_error = _scope_to_graph(graph_builder, job_manager, loop, graph_name)
+    if scope_error:
+        return scope_error
+
     try:
-        # Check if the package is already indexed
-        indexed_repos = list_repos_func().get("repositories", [])
+        # Check if the package is already indexed in the target graph
+        indexed_repos = _indexed_repos(graph_builder, graph_name, list_repos_func)
         for repo in indexed_repos:
             if repo.get("is_dependency") and (repo.get("name") == package_name or repo.get("name") == f"{package_name}.py"):
                 return {
@@ -159,7 +185,9 @@ def add_package_to_graph(graph_builder, job_manager, loop, list_repos_func, **ar
         return {
             "success": True, "job_id": job_id, "package_name": package_name,
             "discovered_path": package_path,
-            "message": f"Background processing started for package '{package_name}'",
+            **({"graph_name": graph_name} if graph_name else {}),
+            "message": f"Background processing started for package '{package_name}'"
+                       + (f" into graph '{graph_name}'" if graph_name else ""),
             "estimated_files": total_files,
             "estimated_duration_seconds": round(estimated_time, 2),
             "estimated_duration_human": f"{int(estimated_time // 60)}m {int(estimated_time % 60)}s" if estimated_time >= 60 else f"{int(estimated_time)}s",
