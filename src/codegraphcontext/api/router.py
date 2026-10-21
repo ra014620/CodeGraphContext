@@ -33,7 +33,11 @@ async def get_server() -> MCPServer:
     """
     global _server_instance
     if _server_instance is None:
-        _server_instance = MCPServer(loop=asyncio.get_running_loop(), cwd=Path.cwd())
+        # One instance serves every HTTP client, so process-wide state changes
+        # (switch_context) are disabled: see SHARED_GATEWAY_DISABLED_TOOLS.
+        _server_instance = MCPServer(
+            loop=asyncio.get_running_loop(), cwd=Path.cwd(), shared_gateway=True
+        )
     return _server_instance
 
 def raise_service_unavailable(exc: Exception):
