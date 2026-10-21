@@ -178,6 +178,20 @@ def _apply_response_token_limit(tool_name: str, text: str) -> str:
         )
 
 
+#: Tools that change process-wide state for every client. On the shared HTTP
+#: gateway one MCPServer serves all clients, so switch_context would retarget
+#: everyone's queries, indexing and watcher to one user's database. Clients
+#: select a graph per call with graph_name instead.
+SHARED_GATEWAY_DISABLED_TOOLS = frozenset({"switch_context", "discover_codegraph_contexts"})
+
+#: Set to 1/true to re-enable the tools above on the gateway (single-user use).
+ALLOW_CONTEXT_SWITCH_ENV = "CGC_ALLOW_CONTEXT_SWITCH"
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class MCPServer:
     """
     The main MCP Server class.
@@ -190,7 +204,7 @@ class MCPServer:
     - The main JSON-RPC communication loop for interacting with an AI assistant.
     """
 
-    def __init__(self, loop=None, cwd: Path | None = None):
+    def __init__(self, loop=None, cwd: Path | None = None, shared_gateway: bool = False):
         """
         Initializes the MCP server and its components. 
         
@@ -198,8 +212,12 @@ class MCPServer:
             loop: The asyncio event loop to use. If not provided, it gets the current
                   running loop or creates a new one.
             cwd: Working directory used for context resolution. Defaults to Path.cwd().
+            shared_gateway: True when one instance serves many clients (the HTTP
+                  gateway). Tools that change process-wide state are then disabled
+                  unless CGC_ALLOW_CONTEXT_SWITCH is set.
         """
         self.cwd = (cwd or Path.cwd()).resolve()
+        self.shared_gateway = shared_gateway
         self.discovered_child_contexts: List[dict] = []
         self._context_note_pending = False
         self.disabled_tools: Set[str] = set()
@@ -214,7 +232,10 @@ class MCPServer:
             self.db_manager = get_database_manager(db_path=ctx.db_path)
             self.db_manager.get_driver()
 
-            if not ctx.is_local:
+            # On the shared gateway the discovery note would steer every client
+            # towards switch_context (disabled there), and the note is itself
+            # shared state consumed by whichever client calls next.
+            if not ctx.is_local and not self.shared_gateway:
                 try:
                     children = discover_child_contexts(self.cwd, max_depth=1)
                     if children:
@@ -249,7 +270,12 @@ class MCPServer:
         """
         Defines the complete tool manifest for the LLM.
         """
-        self.disabled_tools = self._load_disabled_tools()
+        self.gateway_disabled_tools: Set[str] = (
+            set(SHARED_GATEWAY_DISABLED_TOOLS)
+            if self.__dict__.get("shared_gateway") and not _env_flag(ALLOW_CONTEXT_SWITCH_ENV)
+            else set()
+        )
+        self.disabled_tools = self._load_disabled_tools() | self.gateway_disabled_tools
         self.tools = {
             name: definition
             for name, definition in TOOLS.items()
@@ -709,6 +735,16 @@ class MCPServer:
         """
         Routes a tool call from the AI assistant to the appropriate handler function. 
         """
+        if tool_name in self.__dict__.get("gateway_disabled_tools", ()):
+            return {
+                "error": (
+                    f"Tool '{tool_name}' is disabled on the shared HTTP gateway: it changes "
+                    "the active database for every connected client. Pass graph_name on "
+                    f"each call instead. Set {ALLOW_CONTEXT_SWITCH_ENV}=1 to re-enable it "
+                    "for single-user deployments."
+                ),
+                "disabled_reason": "shared_gateway",
+            }
         if tool_name in self.disabled_tools:
             return {"error": f"Tool '{tool_name}' is disabled in mcp.json (disabledTools)."}
 

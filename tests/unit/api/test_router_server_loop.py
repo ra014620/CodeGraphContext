@@ -10,7 +10,7 @@ from codegraphcontext.api.app import create_app
 class LoopRecordingServer:
     """Mimics MCPServer's loop fallback and reports which loop serves the call."""
 
-    def __init__(self, loop=None, cwd=None):
+    def __init__(self, loop=None, cwd=None, shared_gateway=False):
         if loop is None:
             try:
                 loop = asyncio.get_running_loop()
