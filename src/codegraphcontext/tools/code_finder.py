@@ -1,5 +1,6 @@
 # src/codegraphcontext/tools/code_finder.py
 from __future__ import annotations
+import contextvars
 import logging
 from collections import Counter
 
@@ -230,7 +231,23 @@ class CodeFinder:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self._lacks_native_fulltext = getattr(db_manager, 'get_backend_type', lambda: 'neo4j')() != 'neo4j'
-        self._active_graph = None
+        # Per-call graph selection. One CodeFinder is shared by every client of
+        # the MCP server and tool calls run concurrently via asyncio.to_thread,
+        # so this must not be a plain instance attribute: concurrent calls would
+        # read each other's graph, and a call naming no graph would inherit the
+        # previous caller's. A ContextVar is isolated per call because
+        # asyncio.to_thread runs each call in a copy of the caller's context.
+        self._active_graph_var: contextvars.ContextVar = contextvars.ContextVar(
+            f"cgc_active_graph_{id(self)}", default=None
+        )
+
+    @property
+    def _active_graph(self):
+        return self._active_graph_var.get()
+
+    @_active_graph.setter
+    def _active_graph(self, graph_name):
+        self._active_graph_var.set(graph_name)
 
     @property
     def driver(self):
