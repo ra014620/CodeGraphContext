@@ -130,6 +130,71 @@ def _print_index_execution_summary(graph_builder: GraphBuilder) -> None:
         console.print(f"[bold yellow]⚠ {warning}[/bold yellow]")
 
 
+#: Set only by the --graph-name option, so _initialize_services can tell an
+#: explicit request apart from a FALKORDB_GRAPH_NAME the user exported.
+CLI_GRAPH_NAME_ENV = "CGC_CLI_GRAPH_NAME"
+_MULTI_GRAPH_BACKENDS = ("falkordb", "falkordb-remote")
+
+GRAPH_NAME_HELP = (
+    "Use this FalkorDB graph instead of the default "
+    "(FALKORDB_GRAPH_NAME, or 'codegraph'). One server can hold many graphs, "
+    "e.g. one per team or repo. FalkorDB backends only; other backends refuse it."
+)
+
+
+def apply_graph_name(value: Optional[str]) -> Optional[str]:
+    """Typer callback for --graph-name: select the graph before any DB is opened.
+
+    The FalkorDB managers read FALKORDB_GRAPH_NAME when they are created, so
+    setting it while the command line is parsed makes the named graph this
+    process's default for every query, write and schema step.
+    """
+    if value is None:
+        return None
+    name = value.strip()
+    if not name:
+        raise typer.BadParameter("graph name must not be empty")
+    os.environ["FALKORDB_GRAPH_NAME"] = name
+    os.environ[CLI_GRAPH_NAME_ENV] = name
+    return name
+
+
+def graph_name_option(help_text: str = GRAPH_NAME_HELP):
+    """The --graph-name option, shared by every graph-backed command."""
+    return typer.Option(
+        None,
+        "--graph-name",
+        metavar="NAME",
+        help=help_text,
+        callback=apply_graph_name,
+        show_default=False,
+    )
+
+
+def _check_graph_name_backend(db_manager) -> None:
+    """Refuse --graph-name on backends that cannot honour it.
+
+    Runs on the final manager, after any automatic fallback, so a FalkorDB
+    failure that silently switches to KuzuDB cannot send a named-graph command
+    to a different database.
+    """
+    requested = os.environ.get(CLI_GRAPH_NAME_ENV)
+    if not requested:
+        return
+    try:
+        backend = db_manager.get_backend_type()
+    except Exception:
+        backend = "unknown"
+    if backend not in _MULTI_GRAPH_BACKENDS:
+        console.print(
+            f"[bold red]Error:[/bold red] --graph-name requires a FalkorDB backend, "
+            f"but the active backend is [bold]{backend}[/bold], which has a single graph. "
+            "Omit --graph-name, or use --database falkordb / falkordb-remote."
+        )
+        raise typer.Exit(code=1)
+    console.print(f"[cyan]Graph:[/cyan] {requested}")
+
+
 def _initialize_services(
     cli_context_flag: Optional[str] = None,
     cwd: Optional[Path] = None,
@@ -244,6 +309,8 @@ def _initialize_services(
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+    _check_graph_name_backend(db_manager)
 
     graph_builder = GraphBuilder(db_manager, JobManager(), loop)
     code_finder = CodeFinder(db_manager)

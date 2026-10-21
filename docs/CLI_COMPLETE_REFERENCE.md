@@ -129,6 +129,7 @@ These work with any command:
 |--------|-------|-------------|
 | `--database` | `-db` | Override database backend (`kuzudb`, `ladybugdb`, `falkordb`, or `neo4j`). |
 | `--visual` / `--viz` | `-V` | Show results as interactive graph visualization. |
+| `--graph-name NAME` | | Use the named FalkorDB graph instead of the default (`FALKORDB_GRAPH_NAME`, or `codegraph`). Accepted before or after the subcommand. FalkorDB backends only. |
 | `--help` | `-h` | Show help for any command. |
 | `--version` | `-v` | Show version (root level only). |
 
@@ -199,7 +200,7 @@ cgc doctor                           # Check system health
 - Bundle Management: 3 commands
 - Bundle Registry: 4 commands
 - Utilities & Runtime: 6 commands
-- Global Options: 4 options
+- Global Options: 5 options
 - Shortcuts: 9 aliases
 
 ---

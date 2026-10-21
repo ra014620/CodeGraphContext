@@ -40,6 +40,8 @@ from .cli_helpers import (
     clean_helper,
     stats_helper,
     _initialize_services,
+    apply_graph_name,
+    graph_name_option,
     watch_helper,
     unwatch_helper,
     list_watching_helper,
@@ -719,6 +721,7 @@ def bundle_export(
     encrypt_password: Optional[str] = typer.Option(None, "--encrypt-password", envvar="CGC_BUNDLE_PASSWORD", help="Encrypt bundle with this password (or set CGC_BUNDLE_PASSWORD)", hide_input=True),
     exclude_labels: Optional[str] = typer.Option(None, "--exclude-labels", help="Comma-separated node labels to leave out of the bundle, with their edges (e.g. DbTable,ExternalClass) (#1323)"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Export the current graph to a portable .cgc bundle.
@@ -813,6 +816,7 @@ def bundle_import(
     verify_key: Optional[str] = typer.Option(None, "--verify-key", envvar="CGC_BUNDLE_VERIFY_KEY", help="HMAC verification key for signed bundles (or set CGC_BUNDLE_VERIFY_KEY)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Import a .cgc bundle into the current database.
@@ -974,6 +978,7 @@ def bundle_load(
     verify_key: Optional[str] = typer.Option(None, "--verify-key", envvar="CGC_BUNDLE_VERIFY_KEY", help="HMAC verification key for signed bundles (or set CGC_BUNDLE_VERIFY_KEY)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Load a pre-indexed bundle (download if needed, then import).
@@ -1154,6 +1159,7 @@ def export_shortcut(
     encrypt_password: Optional[str] = typer.Option(None, "--encrypt-password", envvar="CGC_BUNDLE_PASSWORD", help="Encrypt bundle with this password (or set CGC_BUNDLE_PASSWORD)", hide_input=True),
     exclude_labels: Optional[str] = typer.Option(None, "--exclude-labels", help="Comma-separated node labels to leave out of the bundle, with their edges (e.g. DbTable,ExternalClass) (#1323)"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc bundle export'"""
     bundle_export(
@@ -1174,6 +1180,7 @@ def diagram(
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Write to a file instead of stdout"),
     limit: int = typer.Option(300, "--limit", "-l", help="Maximum edges to include (truncation is reported in the diagram)"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Export the context graph as a Mermaid or Graphviz DOT diagram.
@@ -1272,6 +1279,7 @@ def load_shortcut(
     verify_key: Optional[str] = typer.Option(None, "--verify-key", envvar="CGC_BUNDLE_VERIFY_KEY", help="HMAC verification key for signed bundles (or set CGC_BUNDLE_VERIFY_KEY)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation when using --clear"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc bundle load'"""
     # Must pass every option explicitly: invoked as a plain function, Typer does not
@@ -1695,6 +1703,7 @@ def index(
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use (overrides mode/default)"),
     summarize: bool = typer.Option(False, "--summarize", "-s", help="Show a summary of the indexed codebase after indexing"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable live progress rendering during indexing."),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Indexes a directory or file by adding it to the code graph.
@@ -1758,6 +1767,7 @@ def update(
     path: Optional[str] = typer.Argument(None, help="Path to refresh. Defaults to current directory."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Reduce output when running from automation"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use (overrides mode/default)"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Refresh an existing repository index.
@@ -1772,7 +1782,8 @@ def update(
 
 @app.command()
 def clean(
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Remove orphaned nodes and relationships from the database.
@@ -1786,7 +1797,8 @@ def clean(
 @app.command()
 def stats(
     path: Optional[str] = typer.Argument(None, help="Path to show stats for. Omit for overall stats."),
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show indexing statistics.
@@ -1814,7 +1826,8 @@ def delete(
     path: Optional[str] = typer.Argument(None, help="Path of the repository to delete from the code graph."),
     all_repos: bool = typer.Option(False, "--all", help="Delete all indexed repositories"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt (for CI/non-interactive use)"),
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Deletes a repository from the code graph.
@@ -1936,6 +1949,7 @@ def report(
     java: bool = typer.Option(False, "--java", "-j", help="Include Spring/Maven Java sections."),
     repo: Optional[str] = typer.Option(None, "--repo", "-r", help="Repository root to scope the report to. Defaults to auto-detection from the current directory."),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Generate a CGC_REPORT.md with god nodes, complexity, cross-module connections, and suggested queries.
@@ -1985,7 +1999,8 @@ def visualize(
     # doesn't fail with "Option '-h' requires an argument".
     host: str = typer.Option("127.0.0.1", "--host", "-H", help="Host interface to bind to."),
     port: int = typer.Option(8000, "--port", "-p", help="Port to run the visualizer server on."),
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Launches the interactive UI to visualize the code graph.
@@ -1995,7 +2010,8 @@ def visualize(
 
 @app.command("list")
 def list_repositories(
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     List all indexed repositories.
@@ -2010,6 +2026,7 @@ def add_package(
     package_name: str = typer.Argument(..., help="Name of the package to add."),
     language: str = typer.Argument(..., help="Language of the package."),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Adds a package to the code graph.
@@ -2038,6 +2055,7 @@ def watch(
             "Defaults off; use 'cgc index --force' for a full re-index."
         ),
     ),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Watch a directory for file changes and automatically update the code graph.
@@ -2070,6 +2088,7 @@ def watch(
 def unwatch(
     path: str = typer.Argument(..., help="Path to stop watching"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     [MCP only] Stop watching a directory for changes.
@@ -2090,6 +2109,7 @@ def unwatch(
 @app.command("watching")
 def watching(
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     [MCP only] List all directories currently being watched for changes.
@@ -2123,6 +2143,7 @@ def find_by_name(
     fuzzy: Optional[bool] = typer.Option(None, "--fuzzy/--no-fuzzy", help="Enable/disable fuzzy matching for this command. Overrides the FUZZY_SEARCH config value (default: true)."),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find code elements by name.
@@ -2259,6 +2280,7 @@ def find_by_pattern(
     case_sensitive: bool = typer.Option(False, "--case-sensitive", "-C", help="Case-sensitive search"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find code elements using substring matching.
@@ -2352,6 +2374,7 @@ def find_by_type(
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum results to return"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find all elements of a specific type.
@@ -2408,6 +2431,7 @@ def find_by_type(
 def find_by_variable(
     name: str = typer.Argument(..., help="Variable name to search for"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find variables by name.
@@ -2454,6 +2478,7 @@ def find_by_variable(
 def find_by_content_search(
     query: str = typer.Argument(..., help="Text to search for in source code and docstrings"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Search code content (source and docstrings) using full-text index.
@@ -2513,6 +2538,7 @@ def find_by_decorator_search(
     decorator: str = typer.Argument(..., help="Decorator name to search for"),
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find functions with a specific decorator.
@@ -2567,6 +2593,7 @@ def find_by_argument_search(
     argument: str = typer.Argument(..., help="Argument/parameter name or type to search for"),
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find functions that take a specific argument/parameter name or type.
@@ -2629,6 +2656,7 @@ def analyze_calls(
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show what functions this function calls (callees).
@@ -2692,6 +2720,7 @@ def analyze_callers(
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show what functions call this function.
@@ -2760,6 +2789,7 @@ def analyze_chain(
     to_file: Optional[str] = typer.Option(None, "--to-file", help="File for target function"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show call chain between two functions.
@@ -2835,6 +2865,7 @@ def analyze_kotlin_call_audit(
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
     fail_on_ambiguity: bool = typer.Option(False, "--fail-on-ambiguity", help="Exit non-zero if any ambiguous Kotlin call groups are found"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Audit Kotlin function call edges for multi-target callsite ambiguity.
@@ -2894,6 +2925,7 @@ def analyze_dependencies(
     show_external: bool = typer.Option(True, "--external/--no-external", help="Show external dependencies"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show dependencies and imports for a module.
@@ -2959,6 +2991,7 @@ def analyze_inheritance_tree(
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show inheritance hierarchy for a class.
@@ -3027,6 +3060,7 @@ def analyze_complexity(
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
     output_format: str = typer.Option("text", "--format", help="Output format: text, json or csv (#1333)"),
     fail_on_violations: bool = typer.Option(False, "--fail-on-violations", help="Exit with code 1 when any function exceeds the threshold (CI gate)"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Show cyclomatic complexity for functions.
@@ -3214,6 +3248,7 @@ def analyze_dead_code(
     exclude_decorators: Optional[str] = typer.Option(None, "--exclude", "-e", help="Comma-separated decorators to exclude"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
     show_all: bool = typer.Option(False, "--show-all", help="Include low-confidence rows (dunders, test hooks, entry-point names) normally hidden (#1332)"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find potentially unused functions.
@@ -3303,6 +3338,7 @@ def analyze_overrides(
     function_name: str = typer.Argument(..., help="Function/method name to find implementations of"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Find all implementations of a function across different classes.
@@ -3364,6 +3400,7 @@ def analyze_variable_usage(
     variable_name: str = typer.Argument(..., help="Variable name to analyze"),
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file path"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Analyze where a variable is defined and used across the codebase.
@@ -3438,6 +3475,7 @@ def query_graph(
     query: str = typer.Argument(..., help="Cypher query to execute (read-only)"),
     visual: bool = typer.Option(False, "--visual", "--viz", "-V", help="Show results as interactive graph visualization"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """
     Execute a custom Cypher query on the code graph.
@@ -3460,6 +3498,7 @@ def query_graph(
 def cypher_legacy(
     query: str = typer.Argument(..., help="The read-only Cypher query to execute."),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """[Deprecated] Use 'cgc query' instead."""
     console.print("[yellow]⚠️  'cgc cypher' is deprecated. Use 'cgc query' instead.[/yellow]")
@@ -3477,7 +3516,8 @@ def index_abbrev(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-index (delete existing and rebuild)"),
     summarize: bool = typer.Option(False, "--summarize", "-s", help="Display a codebase summary after indexing"),
     context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
-    no_progress: bool = typer.Option(False, "--no-progress", help="Disable live progress rendering during indexing.")
+    no_progress: bool = typer.Option(False, "--no-progress", help="Disable live progress rendering during indexing."),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc index'"""
     # `summarize` must be passed explicitly: omitted, it keeps its OptionInfo
@@ -3486,7 +3526,8 @@ def index_abbrev(
 
 @app.command("ls", rich_help_panel="Shortcuts")
 def list_abbrev(
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc list'"""
     list_repositories(context=context)
@@ -3496,7 +3537,8 @@ def delete_abbrev(
     path: Optional[str] = typer.Argument(None, help="Path to delete"),
     all_repos: bool = typer.Option(False, "--all", help="Delete all indexed repositories"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt (for CI/non-interactive use)"),
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc delete'"""
     # `yes` must be forwarded explicitly: omitted, it keeps its OptionInfo
@@ -3507,7 +3549,8 @@ def delete_abbrev(
 def visualize_abbrev(
     repo: Optional[str] = typer.Argument(None, help="Path to the repository to visualize."),
     port: int = typer.Option(8000, "--port", "-p", help="Port to run the visualizer server on."),
-    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use")
+    context: Optional[str] = typer.Option(None, "--context", "-c", help="Specific context to use"),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc visualize'"""
     _load_credentials()
@@ -3533,6 +3576,7 @@ def watch_abbrev(
             "Defaults off; use 'cgc index --force' for a full re-index."
         ),
     ),
+    graph_name: Optional[str] = graph_name_option(),
 ):
     """Shortcut for 'cgc watch'"""
     watch(path, context=context, poll=poll, sync_on_start=sync_on_start)
@@ -3594,6 +3638,17 @@ def main(
         "--db-path",
         help="[Global] Temporarily override database path (for local DBs like KuzuDB)"
     ),
+    graph_name: Optional[str] = typer.Option(
+        None,
+        "--graph-name",
+        metavar="NAME",
+        callback=apply_graph_name,
+        show_default=False,
+        help="[Global] Use this FalkorDB graph instead of the default "
+        "(FALKORDB_GRAPH_NAME, or 'codegraph') for any command. "
+        "Also accepted after the subcommand, e.g. cgc index . --graph-name team-a. "
+        "FalkorDB backends only.",
+    ),
 ):
     """
     Main entry point for the cgc CLI application.
@@ -3629,6 +3684,8 @@ def main(
         console.print("   • [cyan]cgc list[/cyan] - List indexed repositories\n")
         console.print("📊 [bold]Using Neo4j instead of FalkorDB?[/bold]")
         console.print("     Run [cyan]cgc neo4j setup[/cyan] (or [cyan]cgc n[/cyan]) to configure Neo4j\n")
+        console.print("🗂️  [bold]Keeping several graphs on one FalkorDB server?[/bold]")
+        console.print("     Add [cyan]--graph-name NAME[/cyan] to any command, e.g. [cyan]cgc index . --graph-name team-a[/cyan]\n")
         console.print("📈 [bold]Want visual graph output?[/bold]")
         console.print("     Add [cyan]-V[/cyan] or [cyan]--visual[/cyan] to any analyze/find command\n")
         console.print("👉 Run [cyan]cgc help[/cyan] to see all available commands")
