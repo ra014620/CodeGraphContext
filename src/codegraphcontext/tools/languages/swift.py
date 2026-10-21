@@ -406,6 +406,44 @@ class SwiftTreeSitterParser:
 
         return classes, structs, enums, protocols
 
+    def _type_name_from_annotation(self, type_annotation_node) -> Optional[str]:
+        """Resolve the nominal type name from a ``type_annotation`` node.
+
+        Descends through ``optional_type`` wrappers to the underlying
+        ``user_type`` and returns its ``type_identifier``. Collection, function
+        and tuple types are intentionally left unresolved (returns ``None``): a
+        receiver typed ``[Widget]`` is an Array, not a ``Widget``, so inferring
+        the element type would mis-resolve member calls and create false CALLS
+        edges — and preserving precision matters more than recovering those.
+        """
+        type_node = None
+        for child in type_annotation_node.children:
+            if child.type != ":":
+                type_node = child
+                break
+
+        # Unwrap optionals (`Foo?`, `Foo??`) to the underlying type.
+        while type_node is not None and type_node.type == "optional_type":
+            inner = None
+            for child in type_node.children:
+                if child.type != "?":
+                    inner = child
+                    break
+            type_node = inner
+
+        if type_node is None:
+            return None
+        if type_node.type == "user_type":
+            for child in type_node.children:
+                if child.type == "type_identifier":
+                    return self._get_node_text(child)
+            return None
+        if type_node.type == "type_identifier":
+            return self._get_node_text(type_node)
+        # array_type, dictionary_type, function_type, tuple_type, metatype, … —
+        # leave unresolved on purpose.
+        return None
+
     def _parse_variables(self, captures: list, source_code: str, path: Path) -> list[Dict[str, Any]]:
         variables = []
         seen_vars = set()
@@ -430,13 +468,21 @@ class SwiftTreeSitterParser:
                     
                     var_name = find_id(node) or "unknown"
                     
-                    # Try to extract type annotation
+                    # Try to extract type annotation. The Swift grammar wraps the
+                    # nominal type in a `user_type` (and, for optionals, an
+                    # `optional_type`) node, e.g.
+                    #   type_annotation -> user_type -> type_identifier
+                    #   type_annotation -> optional_type -> user_type -> type_identifier
+                    # A flat scan for a *direct* `type_identifier` child therefore
+                    # found nothing and left the type "Unknown" — which silently
+                    # dropped every receiver-qualified call on a typed property
+                    # (`repo.foo()`), the dominant call shape in MVVM/DI code.
                     for child in node.children:
                         if child.type == "type_annotation":
-                            for subchild in child.children:
-                                if subchild.type == "type_identifier":
-                                    var_type = self._get_node_text(subchild)
-                                    break
+                            annotated = self._type_name_from_annotation(child)
+                            if annotated:
+                                var_type = annotated
+                            break
 
                     if var_type == "Unknown":
                         for child in node.children:
