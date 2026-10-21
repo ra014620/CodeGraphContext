@@ -16,8 +16,22 @@ These flags apply to most subcommands:
 | `--db-path` | | Override the on-disk storage directory for embedded engines. |
 | `--context` | `-c` | Target a named context workspace. |
 | `--visual` | `--viz`, `-V` | Open results in the interactive graph visualization UI. |
+| `--graph-name NAME` | | Use the named FalkorDB graph instead of the default (`FALKORDB_GRAPH_NAME`, or `codegraph`). FalkorDB backends only. See [Named graphs](#named-graphs-falkordb). |
 | `--version` | `-v` | Print package version and exit. |
 | `--help` | `-h` | Show help and exit. |
+
+### Named graphs (FalkorDB)
+
+One FalkorDB server can hold many independent graphs, for example one per team or repository. `--graph-name` selects which one a command reads and writes. It is accepted before or after the subcommand:
+
+```bash
+cgc index . --graph-name team-a        # index into graph "team-a"
+cgc ls --graph-name team-a             # list repositories in that graph
+cgc find name UserService --graph-name team-a
+cgc --graph-name team-a watch .        # keep "team-a" in sync with disk
+```
+
+Without it, commands use the default graph (`FALKORDB_GRAPH_NAME`, or `codegraph`). The option applies to that one invocation only. On single-graph backends (KuzuDB, LadybugDB, Neo4j, Nornic) the command exits with an error instead of silently using the default database. MCP clients select a graph per call with the `graph_name` tool argument instead.
 
 Use `cgc version` (or `cgc --version`) to print the installed release (currently **0.5.0**).
 
