@@ -425,9 +425,41 @@ class CodeWatcher:
         observer_cls = PollingObserver if should_use_polling_observer(use_polling) else Observer
         self.observer = observer_cls()
 
+        # Watch keys: the bare path for the default graph (unchanged behaviour),
+        # "<path>::graph=<name>" for a named graph, so one directory can be
+        # watched independently for several graphs.
         self.watched_paths = set()
         self.watches = {}
         self.handlers = {}
+        self._watch_graphs = {}
+        self._scoped_builders = {}
+
+    # Lazily created so instances built without __init__ (CodeWatcher.__new__
+    # in tests and helpers) keep working.
+    def _graphs_by_key(self) -> dict:
+        return self.__dict__.setdefault("_watch_graphs", {})
+
+    def _builders_by_graph(self) -> dict:
+        return self.__dict__.setdefault("_scoped_builders", {})
+
+    @staticmethod
+    def _watch_key(path_str: str, graph_name: typing.Optional[str]) -> str:
+        return path_str if not graph_name else f"{path_str}::graph={graph_name}"
+
+    def _builder_for(self, graph_name: typing.Optional[str]):
+        """GraphBuilder whose reads and writes all target ``graph_name``."""
+        if not graph_name:
+            return self.graph_builder
+        builder = self._builders_by_graph().get(graph_name)
+        if builder is None:
+            from ..tools.graph_builder import GraphBuilder
+            base = self.graph_builder
+            builder = GraphBuilder(base.db_manager, base.job_manager, base.loop, graph_name=graph_name)
+            self._builders_by_graph()[graph_name] = builder
+        return builder
+
+    def is_watching(self, path: str, graph_name: typing.Optional[str] = None) -> bool:
+        return self._watch_key(str(Path(path).resolve()), graph_name) in self.watched_paths
 
     def watch_directory(
         self,
@@ -435,15 +467,17 @@ class CodeWatcher:
         perform_initial_scan: bool = True,
         cgcignore_path: str = None,
         sync_on_start: bool = False,
+        graph_name: typing.Optional[str] = None,
     ):
         path_obj = Path(path).resolve()
         path_str = str(path_obj)
+        key = self._watch_key(path_str, graph_name)
 
-        if path_str in self.watched_paths:
+        if key in self.watched_paths:
             return {"message": "Already watching"}
 
         handler = RepositoryEventHandler(
-            self.graph_builder,
+            self._builder_for(graph_name),
             path_obj,
             perform_initial_scan=perform_initial_scan,
             sync_on_start=sync_on_start,
@@ -452,29 +486,38 @@ class CodeWatcher:
 
         watch = self.observer.schedule(handler, path_str, recursive=True)
 
-        self.watches[path_str] = watch
-        self.handlers[path_str] = handler
-        self.watched_paths.add(path_str)
+        self.watches[key] = watch
+        self.handlers[key] = handler
+        self.watched_paths.add(key)
+        self._graphs_by_key()[key] = (path_str, graph_name)
 
-        return {"message": f"Watching {path_str}"}
+        suffix = f" for graph '{graph_name}'" if graph_name else ""
+        return {"message": f"Watching {path_str}{suffix}"}
 
-    def unwatch_directory(self, path: str):
+    def unwatch_directory(self, path: str, graph_name: typing.Optional[str] = None):
         path_str = str(Path(path).resolve())
+        key = self._watch_key(path_str, graph_name)
 
-        handler = self.handlers.pop(path_str, None)
+        handler = self.handlers.pop(key, None)
         if handler:
             handler.cancel_timers()
 
-        watch = self.watches.pop(path_str, None)
+        watch = self.watches.pop(key, None)
         if watch:
             self.observer.unschedule(watch)
 
-        self.watched_paths.discard(path_str)
+        self.watched_paths.discard(key)
+        self._graphs_by_key().pop(key, None)
 
-        return {"message": f"Stopped watching {path_str}"}
+        suffix = f" for graph '{graph_name}'" if graph_name else ""
+        return {"message": f"Stopped watching {path_str}{suffix}"}
 
-    def list_watched_paths(self):
-        return list(self.watched_paths)
+    def list_watched_paths(self, graph_name: typing.Optional[str] = None):
+        """Paths watched for ``graph_name`` (the default graph when None)."""
+        return sorted(
+            path for path, g in (self._graphs_by_key().get(k, (k, None)) for k in self.watched_paths)
+            if g == graph_name
+        )
 
     def start(self):
         if not self.observer.is_alive():
@@ -491,6 +534,7 @@ class CodeWatcher:
         # stale (#1519).
         self.watched_paths.clear()
         self.watches.clear()
+        self._graphs_by_key().clear()
 
         if self.observer.is_alive():
             self.observer.stop()

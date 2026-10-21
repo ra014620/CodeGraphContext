@@ -100,7 +100,7 @@ def add_code_to_graph(graph_builder, job_manager, loop, list_repos_func, **args)
         
         # Estimate time and create a job for the user to track.
         total_files, estimated_time = graph_builder.estimate_processing_time(path_obj)
-        job_id = job_manager.create_job(str(path_obj), is_dependency)
+        job_id = job_manager.create_job(str(path_obj), is_dependency, graph_name=graph_name)
         job_manager.update_job(job_id, total_files=total_files, estimated_duration=estimated_time)
         
         # Create the coroutine for the background task and schedule it on the main event loop.
@@ -171,7 +171,7 @@ def add_package_to_graph(graph_builder, job_manager, loop, list_repos_func, **ar
         
         total_files, estimated_time = graph_builder.estimate_processing_time(path_obj)
         
-        job_id = job_manager.create_job(package_path, is_dependency)
+        job_id = job_manager.create_job(package_path, is_dependency, graph_name=graph_name)
         
         job_manager.update_job(job_id, total_files=total_files, estimated_duration=estimated_time)
         

@@ -47,6 +47,7 @@ class JobInfo:
     last_update_time: Optional[datetime] = None
     error_type: Optional[str] = None
     traceback: Optional[str] = None
+    graph_name: Optional[str] = None
 
     def __post_init__(self):
         """Ensures the errors list is initialized after the object is created."""
@@ -79,7 +80,7 @@ class JobManager:
         self.jobs: Dict[str, JobInfo] = {}
         self.lock = threading.Lock() # A lock to ensure thread-safe access to the jobs dictionary.
 
-    def create_job(self, path: str, is_dependency: bool = False) -> str:
+    def create_job(self, path: str, is_dependency: bool = False, graph_name: Optional[str] = None) -> str:
         """Creates a new job, assigns it a unique ID, and stores it."""
         job_id = str(uuid.uuid4())
         with self.lock:
@@ -88,7 +89,8 @@ class JobManager:
                 status=JobStatus.PENDING,
                 start_time=datetime.now(),
                 path=path,
-                is_dependency=is_dependency
+                is_dependency=is_dependency,
+                graph_name=graph_name,
             )
         return job_id
 

@@ -139,7 +139,8 @@ TOOLS = {
                 "repo_path": {
                     "type": "string",
                     "description": "Path to repository root"
-                }
+                },
+                "graph_name": _GRAPH_NAME_PROP
             },
             "required": ["repo_path"]
         }
@@ -284,10 +285,12 @@ TOOLS = {
 
     "list_watched_paths": {
         "name": "list_watched_paths",
-        "description": "List all watched directories.",
+        "description": "List the directories watched for a graph (the default graph unless graph_name is given).",
         "inputSchema": {
             "type": "object",
-            "properties": {}
+            "properties": {
+                "graph_name": _GRAPH_NAME_PROP
+            }
         }
     },
 
@@ -297,7 +300,8 @@ TOOLS = {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "repo_path": {"type": "string"}
+                "repo_path": {"type": "string"},
+                "graph_name": _GRAPH_NAME_PROP
             },
             "required": ["repo_path"]
         }
