@@ -150,7 +150,11 @@ class GraphBuilder:
         return self._parsed_cache.parsers[lang_name]
 
     def create_schema(self, graph_name: str = None) -> None:
-        create_graph_schema(self._driver_for(graph_name), self.db_manager)
+        # Default to this builder's graph. The constructor calls create_schema()
+        # with no argument, so a builder scoped to a named graph used to put its
+        # indexes on the *default* graph, leaving the named graph unindexed and
+        # every MERGE a label scan (indexing grew roughly quadratically).
+        create_graph_schema(self._driver_for(graph_name or self.graph_name), self.db_manager)
 
     _MAX_STR_LEN = MAX_STR_LEN
 
